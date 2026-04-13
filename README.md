@@ -1,2 +1,3 @@
-# health-prime
-HealthPrime - Web-based Health Information System
+# Welcome to your Lovable project
+
+TODO: Document your project here
