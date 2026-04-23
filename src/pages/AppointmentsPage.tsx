@@ -1,0 +1,272 @@
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { DataTable, type Column } from "@/components/shared/DataTable";
+import { StatusBadge } from "@/components/shared/StatusBadge";
+import { Button } from "@/components/ui/button";
+import { CalendarPlus, Sparkles } from "lucide-react";
+import { apiFetch } from "@/api/client";
+import { useLang } from "@/hooks/useLang";
+import { tx } from "@/lib/i18n";
+import { format } from "date-fns";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
+import { Skeleton } from "@/components/ui/skeleton";
+import type { PatientListItem, ProviderListItem } from "@/api/types";
+
+interface AppointmentRow {
+  id: number;
+  patientId: number;
+  providerId: number;
+  appointmentDate: string;
+  reason: string;
+  status: string;
+  notes?: string;
+  isAiGenerated: boolean;
+  patientName: string;
+  providerName: string;
+}
+
+export default function AppointmentsPage() {
+  const qc = useQueryClient();
+  const { lang } = useLang();
+  
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isAiDialogOpen, setIsAiDialogOpen] = useState(false);
+
+  const [patientId, setPatientId] = useState("");
+  const [providerId, setProviderId] = useState("");
+  const [dateStr, setDateStr] = useState("");
+  const [timeStr, setTimeStr] = useState("");
+  const [reason, setReason] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const { data: appointments = [], isLoading } = useQuery({
+    queryKey: ["appointments"],
+    queryFn: () => apiFetch<AppointmentRow[]>("/appointments"),
+  });
+
+  const { data: patients = [] } = useQuery({
+    queryKey: ["patients"],
+    queryFn: () => apiFetch<PatientListItem[]>("/patients"),
+  });
+
+  const { data: providers = [] } = useQuery({
+    queryKey: ["providers"],
+    queryFn: () => apiFetch<ProviderListItem[]>("/providers"),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: { patientId: number; providerId: number; appointmentDate: string; reason: string; notes?: string }) =>
+      apiFetch("/appointments", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["appointments"] });
+      setIsDialogOpen(false);
+      resetForm();
+      toast.success(tx("appointmentRegisteredSuccess", lang));
+    },
+    onError: () => toast.error(tx("error", lang)),
+  });
+
+  const aiMutation = useMutation({
+    mutationFn: (data: { patientId: number; reason: string }) =>
+      apiFetch("/appointments/generate-slot", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["appointments"] });
+      setIsAiDialogOpen(false);
+      resetForm();
+      toast.success(tx("aiSlotSuccess", lang));
+    },
+    onError: () => toast.error(tx("error", lang)),
+  });
+
+  const resetForm = () => {
+    setPatientId("");
+    setProviderId("");
+    setDateStr("");
+    setTimeStr("");
+    setReason("");
+    setNotes("");
+  };
+
+  const handleCreate = () => {
+    if (!patientId || !providerId || !dateStr || !timeStr || !reason) {
+      toast.error(tx("fillRequiredFields", lang));
+      return;
+    }
+    const isoDate = new Date(`${dateStr}T${timeStr}`).toISOString();
+    createMutation.mutate({
+      patientId: Number(patientId),
+      providerId: Number(providerId),
+      appointmentDate: isoDate,
+      reason,
+      notes,
+    });
+  };
+
+  const handleGenerateAI = () => {
+    if (!patientId || !reason) {
+      toast.error(tx("selectPatientAndReason", lang));
+      return;
+    }
+    aiMutation.mutate({ patientId: Number(patientId), reason });
+  };
+
+  const columns: Column<AppointmentRow>[] = [
+    { header: tx("dateTime", lang), accessor: (row) => format(new Date(row.appointmentDate), "PP p") },
+    { header: tx("patient", lang), accessor: "patientName" },
+    { header: tx("provider", lang), accessor: "providerName" },
+    { header: tx("appointmentReason", lang), accessor: "reason" },
+    {
+      header: tx("status", lang),
+      accessor: (row) => (
+        <div className="flex gap-2 items-center">
+          <StatusBadge variant={row.status === "Scheduled" ? "active" : "inactive"}>{row.status}</StatusBadge>
+          {row.isAiGenerated && <div className="text-secondary/80 flex items-center gap-1 text-xs font-semibold" title="Generated by AI"><Sparkles className="w-3 h-3"/> AI</div>}
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <DashboardLayout>
+      <PageHeader
+        title={tx("appointments", lang)}
+        description={tx("manageAppointmentsDesc", lang)}
+        actions={
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => setIsAiDialogOpen(true)} className="gap-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/40 dark:text-indigo-300">
+              <Sparkles className="w-4 h-4" /> {tx("generateAISlot", lang)}
+            </Button>
+            <Button onClick={() => setIsDialogOpen(true)} className="gap-2">
+              <CalendarPlus className="w-4 h-4" /> {tx("bookAppointment", lang)}
+            </Button>
+          </div>
+        }
+      />
+
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ) : (
+        <DataTable columns={columns} data={appointments} emptyMessage={tx("noData", lang)} />
+      )}
+
+      {/* Standard Booking Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
+        <DialogContent className="sm:max-w-[425px]" dir={lang === "ar" ? "rtl" : "ltr"}>
+          <DialogHeader>
+            <DialogTitle>{tx("bookAppointment", lang)}</DialogTitle>
+            <DialogDescription>
+              {tx("bookingDialogDesc", lang)}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label>{tx("patient", lang)}</Label>
+              <Select value={patientId} onValueChange={setPatientId}>
+                <SelectTrigger>
+                  <SelectValue placeholder={tx("selectPatient", lang)} />
+                </SelectTrigger>
+                <SelectContent>
+                  {patients.map(p => <SelectItem key={p.id} value={p.id.toString()}>{p.name} ({p.nationalId})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>{lang === "ar" ? "مزود الرعاية" : "Provider"}</Label>
+              <Select value={providerId} onValueChange={setProviderId}>
+                <SelectTrigger>
+                  <SelectValue placeholder={tx("selectProvider", lang)} />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers.map(p => <SelectItem key={p.id} value={p.id.toString()}>{p.name} ({p.specialty})</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label>{tx("date", lang)}</Label>
+                <Input type="date" value={dateStr} onChange={e => setDateStr(e.target.value)} />
+              </div>
+              <div className="grid gap-2">
+                <Label>{tx("time", lang)}</Label>
+                <Input type="time" value={timeStr} onChange={e => setTimeStr(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label>{tx("appointmentReason", lang)}</Label>
+              <Input placeholder="Routine Checkup, Fever, etc" value={reason} onChange={e => setReason(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setIsDialogOpen(false)}>{tx("cancel", lang)}</Button>
+            <Button onClick={handleCreate} disabled={createMutation.isPending}>{tx("save", lang)}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* AI Slot Generator Dialog */}
+      <Dialog open={isAiDialogOpen} onOpenChange={(open) => { setIsAiDialogOpen(open); if (!open) resetForm(); }}>
+        <DialogContent className="sm:max-w-[425px]" dir={lang === "ar" ? "rtl" : "ltr"}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+               <Sparkles className="w-5 h-5 text-indigo-500" /> {tx("generateAISlot", lang)}
+            </DialogTitle>
+            <DialogDescription>
+              {tx("aiAgentDesc", lang)}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label>{tx("patient", lang)}</Label>
+              <Select value={patientId} onValueChange={setPatientId}>
+                <SelectTrigger>
+                  <SelectValue placeholder={tx("selectPatient", lang)} />
+                </SelectTrigger>
+                <SelectContent>
+                  {patients.map(p => <SelectItem key={p.id} value={p.id.toString()}>{p.name} - {p.nationalId}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>{tx("appointmentReason", lang)}</Label>
+              <Textarea 
+                placeholder={tx("describeSymptoms", lang)} 
+                value={reason} 
+                onChange={e => setReason(e.target.value)} 
+                className="h-24"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setIsAiDialogOpen(false)} disabled={aiMutation.isPending}>{tx("cancel", lang)}</Button>
+            <Button onClick={handleGenerateAI} disabled={aiMutation.isPending} className="bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer group">
+               {aiMutation.isPending ? tx("loading", lang) : <><Sparkles className="w-4 h-4 mr-2 group-hover:animate-pulse" /> {tx("smartSlotSelection", lang)}</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </DashboardLayout>
+  );
+}
