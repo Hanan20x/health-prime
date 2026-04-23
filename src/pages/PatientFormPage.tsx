@@ -110,12 +110,6 @@ export default function PatientFormPage() {
         }
         throw new Error(`${tx("completeFields", lang)} ${lang === "ar" ? missingAr.join("، ") : missingEn.join(", ")}.`);
       }
-      if (email.trim()) {
-        const emailRegex = /^[a-zA-Z0-9_.+-]+@healthprime\.sa$/i;
-        if (!emailRegex.test(email.trim())) {
-          throw new Error(tx("emailDomainError", lang));
-        }
-      }
       const body = {
         firstName: firstName.trim(),
         secondName: secondName.trim() || null,
