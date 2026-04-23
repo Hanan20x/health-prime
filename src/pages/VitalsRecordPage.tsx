@@ -156,9 +156,9 @@ export default function VitalsRecordPage() {
                    {tx("physMetrics", lang)}
                 </h3>
                 <div className="grid gap-6">
-                   <VitalsInput label={tx("temp", lang)} value={temp} onChange={setTemp} unit="°C" placeholder="37.0" last={ctx?.lastVitals?.temperatureC} />
-                   <VitalsInput label={tx("weight", lang)} value={weight} onChange={setWeight} unit="kg" placeholder="70.0" last={ctx?.lastVitals?.weightKg} />
-                   <VitalsInput label={tx("height", lang)} value={height} onChange={setHeight} unit="cm" placeholder="170" last={ctx?.lastVitals?.heightCm} />
+                    <VitalsInput lang={lang} label={tx("temp", lang)} value={temp} onChange={setTemp} unit="°C" placeholder="37.0" last={ctx?.lastVitals?.temperatureC} />
+                    <VitalsInput lang={lang} label={tx("weight", lang)} value={weight} onChange={setWeight} unit="kg" placeholder="70.0" last={ctx?.lastVitals?.weightKg} />
+                    <VitalsInput lang={lang} label={tx("height", lang)} value={height} onChange={setHeight} unit="cm" placeholder="170" last={ctx?.lastVitals?.heightCm} />
                 </div>
               </div>
               <div>
@@ -166,17 +166,17 @@ export default function VitalsRecordPage() {
                    {tx("coreVitals", lang)}
                 </h3>
                 <div className="grid gap-6">
-                   <VitalsInput label={tx("pulseRate", lang)} value={hr} onChange={setHr} unit="bpm" placeholder="72" last={ctx?.lastVitals?.heartRate} />
-                   <VitalsInput label={tx("rr", lang)} value={rr} onChange={setRr} unit="min" placeholder="16" last={ctx?.lastVitals?.respiratoryRate} />
-                   <VitalsInput label={tx("spo2", lang)} value={spo2} onChange={setSpo2} unit="%" placeholder="98" last={ctx?.lastVitals?.spo2} />
+                    <VitalsInput lang={lang} label={tx("pulseRate", lang)} value={hr} onChange={setHr} unit="bpm" placeholder="72" last={ctx?.lastVitals?.heartRate} />
+                    <VitalsInput lang={lang} label={tx("rr", lang)} value={rr} onChange={setRr} unit="min" placeholder="16" last={ctx?.lastVitals?.respiratoryRate} />
+                    <VitalsInput lang={lang} label={tx("spo2", lang)} value={spo2} onChange={setSpo2} unit="%" placeholder="98" last={ctx?.lastVitals?.spo2} />
                 </div>
               </div>
             </div>
             <div className="pt-4 border-t border-slate-100">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">{tx("bloodPressure", lang)}</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-16 gap-y-6">
-                 <VitalsInput label={tx("systolic", lang)} value={sys} onChange={setSys} unit="mmHg" placeholder="120" />
-                 <VitalsInput label={tx("diastolic", lang)} value={dia} onChange={setDia} unit="mmHg" placeholder="80" />
+                  <VitalsInput lang={lang} label={tx("systolic", lang)} value={sys} onChange={setSys} unit="mmHg" placeholder="120" />
+                  <VitalsInput lang={lang} label={tx("diastolic", lang)} value={dia} onChange={setDia} unit="mmHg" placeholder="80" />
               </div>
             </div>
           </div>
@@ -218,10 +218,10 @@ export default function VitalsRecordPage() {
              <div className="space-y-6">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">{tx("motorFunction", lang)} (0-5)</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                   <VitalsInput label="Upper Left" unit="" placeholder="5" />
-                   <VitalsInput label="Upper Right" unit="" placeholder="5" />
-                   <VitalsInput label="Lower Left" unit="" placeholder="5" />
-                   <VitalsInput label="Lower Right" unit="" placeholder="5" />
+                    <VitalsInput lang={lang} label="Upper Left" unit="" placeholder="5" />
+                    <VitalsInput lang={lang} label="Upper Right" unit="" placeholder="5" />
+                    <VitalsInput lang={lang} label="Lower Left" unit="" placeholder="5" />
+                    <VitalsInput lang={lang} label="Lower Right" unit="" placeholder="5" />
                 </div>
              </div>
           </div>
@@ -322,7 +322,7 @@ export default function VitalsRecordPage() {
                    </Select>
                 </div>
              </div>
-             <VitalsInput label={tx("oxygenSupport", lang)} unit="" placeholder="e.g. 2L Nasal Cannula" />
+             <VitalsInput lang={lang} label={tx("oxygenSupport", lang)} unit="" placeholder="e.g. 2L Nasal Cannula" />
           </div>
         );
       case "pain":
@@ -334,7 +334,7 @@ export default function VitalsRecordPage() {
              </div>
              <input type="range" min="0" max="10" value={painLevel} onChange={e => setPainLevel(e.target.value)} className="w-full h-1.5 bg-slate-100 rounded-full appearance-none accent-primary cursor-pointer" />
              <div className="grid grid-cols-2 gap-8">
-                <VitalsInput label="Pain Location" unit="" placeholder="e.g. Back" />
+                <VitalsInput lang={lang} label="Pain Location" unit="" placeholder="e.g. Back" />
                 <div className="space-y-3">
                    <Label className="text-xs font-semibold text-slate-500">Pain Character</Label>
                    <Select><SelectTrigger className="h-11 rounded-lg border-slate-200"><SelectValue placeholder="Select character..." /></SelectTrigger><SelectContent><SelectItem value="sharp">Sharp</SelectItem><SelectItem value="dull">Dull</SelectItem></SelectContent></Select>
@@ -762,7 +762,7 @@ export default function VitalsRecordPage() {
   );
 }
 
-function VitalsInput({ label, value, onChange, unit, placeholder, last }: any) {
+function VitalsInput({ label, value, onChange, unit, placeholder, last, lang }: any) {
   return (
     <div className="space-y-2.5">
       <div className="flex items-center justify-between px-0.5">
