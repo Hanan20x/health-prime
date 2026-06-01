@@ -326,6 +326,9 @@ class AppointmentCreate(APIModel):
     appointment_date: datetime
     reason: str
     notes: str | None = None
+    department: str | None = None
+    visit_type: str | None = None
+    priority_level: str | None = None
 
 
 class AppointmentOut(APIModel):
@@ -337,6 +340,211 @@ class AppointmentOut(APIModel):
     status: str
     notes: str | None = None
     is_ai_generated: bool
+    priority_level: str | None = None
+    department: str | None = None
+    visit_type: str | None = None
+    ai_explanation: str | None = None
+    manual_slots_affected: str | None = None
+    
+    # Nested fields for UI convenience
+    patient_name: str | None = None
+    provider_name: str | None = None
+
+
+class AppointmentGenerateSpec(APIModel):
+    patient_id: int
+    role: str
+    specialty: str
+    license_number: str
+    department: str | None = None
+    status: str
+
+
+# --- Vitals ---
+class VitalCreate(APIModel):
+    patient_id: int
+    temperature_c: float | None = None
+    heart_rate: int | None = None
+    systolic_bp: int | None = None
+    diastolic_bp: int | None = None
+    respiratory_rate: int | None = None
+    spo2: int | None = None
+    weight_kg: float | None = None
+    height_cm: float | None = None
+    bmi: float | None = None
+    bsa: float | None = None
+    map_bp: float | None = None
+    smoking_status: str | None = None
+    disability: str | None = None
+    physical_activity: str | None = None
+    notes: str | None = None
+
+
+class VitalOut(APIModel):
+    id: int
+    patient_id: int
+    recorded_at: datetime
+    temperature_c: float | None = None
+    heart_rate: int | None = None
+    systolic_bp: int | None = None
+    diastolic_bp: int | None = None
+    respiratory_rate: int | None = None
+    spo2: int | None = None
+    weight_kg: float | None = None
+    height_cm: float | None = None
+    bmi: float | None = None
+    bsa: float | None = None
+    map_bp: float | None = None
+    smoking_status: str | None = None
+    disability: str | None = None
+    physical_activity: str | None = None
+    notes: str | None = None
+
+
+class PatientVitalsContext(APIModel):
+    patient_id: int
+    full_name: str
+    national_id: str
+    gender: str
+    age: int
+    allergies_list: list[str]
+    doctor_name: str | None = None
+    facility: str | None = None
+    visit_time: str | None = None
+    bmi: str | None = None
+    bp_display: str | None = None
+    last_vitals: VitalOut | None = None
+
+
+class ChartPoint(APIModel):
+    date: str
+    value: float | None = None
+    systolic: int | None = None
+    diastolic: int | None = None
+
+
+class VitalsChartBundle(APIModel):
+    temperature: list[ChartPoint]
+    heart_rate: list[ChartPoint]
+    respiratory_rate: list[ChartPoint]
+    blood_pressure: list[ChartPoint]
+
+
+class VitalsHistoryRow(APIModel):
+    date: str
+    time: str
+    temp: str
+    bp: str
+    hr: str
+    rr: str
+    spo2: str
+    weight: str
+    height: str | None = None
+    bmi: str | None = None
+    recorded_by: str
+
+
+# --- EMR ---
+class EmrSectionOut(APIModel):
+    id: int
+    key: str
+    title: str
+    content: str
+    date: str
+
+
+class EmrSectionUpdate(APIModel):
+    content: str
+
+
+class ClinicalOrderOut(APIModel):
+    id: int
+    type: str
+    description: str
+    status: str
+    date: str
+
+
+class EmrVitalsSnapshot(APIModel):
+    temp: str
+    hr: str
+    bp: str
+    spo2: str
+    rr: str
+
+
+class EmrPatientBanner(APIModel):
+    name: str
+    national_id: str
+    gender: str
+    dob: str
+    age: int
+    doctor: str | None = None
+    facility: str | None = None
+    visit_time: str | None = None
+    allergies: list[str]
+    avatar_url: str | None = None
+    vitals: EmrVitalsSnapshot
+
+
+class EmrPageOut(APIModel):
+    patient: EmrPatientBanner
+    sections: list[EmrSectionOut]
+    orders: list[ClinicalOrderOut]
+    vitals_history: list[VitalsHistoryRow]
+
+
+# --- Dashboard ---
+class StatBlock(APIModel):
+    title: str
+    value: int
+    description: str
+
+
+class ActivityItem(APIModel):
+    id: int
+    action: str
+    patient: str
+    provider: str
+    time: str
+
+
+class DashboardOut(APIModel):
+    stats: list[StatBlock]
+    activity: list[ActivityItem]
+
+
+# --- Appointments ---
+class AppointmentCreate(APIModel):
+    patient_id: int
+    provider_id: int
+    appointment_date: datetime
+    reason: str
+    notes: str | None = None
+    department: str | None = None
+    visit_type: str | None = None
+    priority_level: str | None = None
+    is_ai_generated: bool | None = None
+    ai_explanation: str | None = None
+    manual_slots_affected: str | None = None
+    optimization_diffs: str | None = None
+
+
+class AppointmentOut(APIModel):
+    id: int
+    patient_id: int
+    provider_id: int
+    appointment_date: datetime
+    reason: str
+    status: str
+    notes: str | None = None
+    is_ai_generated: bool
+    priority_level: str | None = None
+    department: str | None = None
+    visit_type: str | None = None
+    ai_explanation: str | None = None
+    manual_slots_affected: str | None = None
+    optimization_diffs: str | None = None
     
     # Nested fields for UI convenience
     patient_name: str | None = None
@@ -346,4 +554,48 @@ class AppointmentOut(APIModel):
 class AppointmentGenerateSpec(APIModel):
     patient_id: int
     reason: str
+    appointment_id: int | None = None
     preferred_date_range: list[datetime] | None = None
+
+
+# --- AI Optimization ---
+class OptimizationRequest(APIModel):
+    patient_id: int
+    provider_id: int | None = None
+    appointment_date: str | None = None
+    time_str: str | None = None
+    reason: str
+    department: str | None = None
+    visit_type: str | None = None
+    priority_level: str | None = None
+
+class OptimizationDiffField(APIModel):
+    field: str
+    staff_entry: str | None = None
+    ai_suggestion: str | None = None
+    flag: bool = False
+    reasoning: str | None = None
+
+class OptimizationReview(APIModel):
+    diffs: list[OptimizationDiffField]
+    validation_errors: list[str] | None = None
+    ai_skipped: bool = False
+    ai_explanation: str | None = None
+
+class AIAgentFlag(APIModel):
+    type: str
+    severity: str
+    current: str | None = None
+    suggested: str | None = None
+    explanation: str
+
+class AIAgentResponse(APIModel):
+    visit_type: str | None = None
+    emergency_route: bool = False
+    final_priority: str | None = None
+    priority_action: str | None = None
+    recommended_provider: str | None = None
+    provider_action: str | None = None
+    flags: list[AIAgentFlag] = Field(default_factory=list)
+    nurse_summary: str | None = None
+

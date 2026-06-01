@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AppSidebar } from "./AppSidebar";
 import { AppHeader } from "./AppHeader";
@@ -11,6 +12,8 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const { lang } = useLang();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  
   const { data: me } = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => apiFetch<UserOut>("/auth/me"),
@@ -18,12 +21,14 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
   return (
     <div className="flex min-h-screen w-full" dir={lang === "ar" ? "rtl" : "ltr"}>
-      <AppSidebar />
+      {isSidebarOpen && <AppSidebar />}
       <div className="flex-1 flex flex-col min-w-0">
         <AppHeader 
           userName={me?.fullName} 
           userRole={me?.role} 
           avatarUrl={me?.avatarUrl} 
+          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          isSidebarOpen={isSidebarOpen}
         />
         <main className="flex-1 p-6 overflow-auto">{children}</main>
       </div>

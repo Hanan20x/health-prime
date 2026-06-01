@@ -18,12 +18,14 @@ interface DataTableProps<T> {
   columns: Column<T>[];
   data: T[];
   emptyMessage?: string;
+  rowClassName?: (row: T) => string;
 }
 
 export function DataTable<T extends { id?: string | number }>({
   columns,
   data,
   emptyMessage = "No data found",
+  rowClassName,
 }: DataTableProps<T>) {
   if (data.length === 0) {
     return <EmptyState title={emptyMessage} description="Try adjusting your search or filters." />;
@@ -43,7 +45,7 @@ export function DataTable<T extends { id?: string | number }>({
         </TableHeader>
         <TableBody>
           {data.map((row, rowIndex) => (
-            <TableRow key={row.id ?? rowIndex}>
+            <TableRow key={row.id ?? rowIndex} className={rowClassName ? rowClassName(row) : undefined}>
               {columns.map((col, colIndex) => (
                 <TableCell key={colIndex} className={col.className}>
                   {typeof col.accessor === "function"

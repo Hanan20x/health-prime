@@ -1,3 +1,7 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import Base, engine
-from app.routers import auth, dashboard, emr, patients, providers, vitals, appointments
+from app.routers import auth, dashboard, emr, patients, providers, vitals, appointments, diagnosis
 from app.seed import seed_if_empty
 
 
@@ -36,6 +40,7 @@ app.include_router(dashboard.router)
 app.include_router(vitals.router)
 app.include_router(emr.router)
 app.include_router(appointments.router)
+app.include_router(diagnosis.router)
 
 @app.get("/health")
 def health():

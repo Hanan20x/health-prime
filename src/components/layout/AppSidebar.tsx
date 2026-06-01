@@ -8,6 +8,8 @@ import {
   LogOut,
   Activity,
   CalendarPlus,
+  CalendarDays,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLang } from "@/hooks/useLang";
@@ -24,10 +26,12 @@ export function AppSidebar() {
   const navItems = [
     { key: "dashboard" as const, path: "/dashboard", icon: LayoutDashboard, always: true },
     { key: "appointments" as const, path: "/appointments", icon: CalendarPlus, always: true },
+    { key: "staffSchedule" as const, path: "/schedule", icon: CalendarDays, always: true },
     { key: "healthcareProviders" as const, path: "/providers", icon: Users, always: canManageProviders },
     { key: "patients" as const, path: "/patients", icon: UserRound, always: true },
     { key: "patientEMR" as const, path: "/patients/emr", icon: ClipboardList, always: canViewEMR },
     { key: "recordVitals" as const, path: "/vitals/record", icon: Activity, always: canRecordVitals },
+    { key: "howAiWorks" as const, path: "/ai-agents-explained", icon: Brain, always: true },
   ].filter((item) => item.always);
 
   const handleLogout = () => {

@@ -65,7 +65,7 @@ def get_emr(patient_id: int, _user: CurrentUser, db: Annotated[Session, Depends(
             key=s.section_key,
             title=s.title,
             content=s.content,
-            date="Recent Log"
+            date=s.created_at.strftime("%I:%M %p — %b %d, %Y") if hasattr(s, "created_at") and s.created_at else "Recent Log"
         )
         for s in sections_db
     ]
@@ -110,7 +110,7 @@ def get_emr(patient_id: int, _user: CurrentUser, db: Annotated[Session, Depends(
     
     return EmrPageOut(patient=banner, sections=section_out, orders=order_out, vitals_history=hist)
 
-@router.post("/patients/{patient_id}/emr/{section_key}", response_model=EmrSectionOut)
+@router.post("/patients/{patient_id}/emr/{section_key:path}", response_model=EmrSectionOut)
 def add_emr_entry(
     patient_id: int,
     section_key: str,
@@ -157,7 +157,7 @@ def add_emr_entry(
         key=section.section_key,
         title=section.title,
         content=section.content,
-        date="Entry Logged"
+        date=section.created_at.strftime("%I:%M %p — %b %d, %Y") if hasattr(section, "created_at") and section.created_at else "Entry Logged"
     )
 
 @router.delete("/emr/records/{record_id}")

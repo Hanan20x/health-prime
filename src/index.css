@@ -6,7 +6,7 @@
 
 @layer base {
   :root {
-    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-sans: 'Inter', "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 
     --background: 40 25% 98%;
     --foreground: 220 15% 12%;
@@ -65,6 +65,7 @@
 
   *, *::before, *::after {
     box-sizing: border-box;
+    font-family: var(--font-sans);
   }
 
   html {
@@ -94,3 +95,86 @@
     color: hsl(var(--primary-foreground));
   }
 }
+
+@layer components {
+}
+
+/* React Big Calendar Overrides for HealthPrime Theme */
+/* MOVED OUTSIDE OF @layer components so Tailwind doesn't purge them */
+.rbc-calendar {
+  font-family: var(--font-sans);
+  border: 1px solid hsl(40 15% 92%);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: white;
+}
+.rbc-header {
+  padding: 10px 0;
+  font-weight: 600;
+  color: hsl(220 15% 12%);
+  border-bottom: 1px solid hsl(40 15% 92%) !important;
+}
+.rbc-event {
+  /* Base styles, will be overridden by Tailwind classes */
+  border-radius: 6px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+}
+.rbc-event:focus {
+  outline: none;
+}
+.rbc-today {
+  background-color: #f0fdf4 !important; /* Very light green (emerald-50) */
+}
+.rbc-toolbar {
+  padding-bottom: 1rem;
+}
+.rbc-toolbar button:active,
+.rbc-toolbar button.rbc-active {
+  background-color: #10b981 !important; /* emerald-500 */
+  border-color: #10b981 !important;
+  color: white !important;
+  box-shadow: none !important;
+}
+.rbc-toolbar button:hover {
+  background-color: #ecfdf5; /* emerald-50 */
+  border-color: #10b981;
+}
+.rbc-toolbar button {
+  color: #047857; /* emerald-700 */
+  border-color: #6ee7b7; /* emerald-300 */
+  border-radius: 8px;
+  padding: 6px 12px;
+  transition: all 0.2s ease;
+}
+.rbc-time-view, .rbc-month-view, .rbc-agenda-view {
+  border-color: hsl(40 15% 92%) !important;
+  border-radius: 0 0 0.75rem 0.75rem;
+}
+
+/* Safely replace Back/Next with arrows without overriding React props */
+.rbc-btn-group:first-child button:nth-child(2) {
+  font-size: 0;
+  min-width: 40px;
+  vertical-align: middle;
+}
+.rbc-btn-group:first-child button:nth-child(2)::after {
+  content: "‹";
+  font-size: 1.25rem;
+  line-height: 1;
+  font-weight: bold;
+}
+
+.rbc-btn-group:first-child button:nth-child(3) {
+  font-size: 0;
+  min-width: 40px;
+  vertical-align: middle;
+}
+.rbc-btn-group:first-child button:nth-child(3)::after {
+  content: "›";
+  font-size: 1.25rem;
+  line-height: 1;
+  font-weight: bold;
+}
+
+

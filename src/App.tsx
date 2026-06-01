@@ -17,6 +17,8 @@ import PatientEMRPage from "./pages/PatientEMRPage";
 import VitalsRecordPage from "./pages/VitalsRecordPage";
 import AppointmentsPage from "./pages/AppointmentsPage";
 import MyProfilePage from "./pages/MyProfilePage";
+import AiExplanationPage from "./pages/AiExplanationPage";
+import StaffSchedulePage from "./pages/StaffSchedulePage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -49,6 +51,8 @@ const App = () => (
               <Route path="/vitals/record" element={<VitalsRecordPage />} />
               <Route path="/appointments" element={<AppointmentsPage />} />
               <Route path="/profile" element={<MyProfilePage />} />
+              <Route path="/schedule" element={<StaffSchedulePage />} />
+              <Route path="/ai-agents-explained" element={<AiExplanationPage />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

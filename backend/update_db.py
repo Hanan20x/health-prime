@@ -44,6 +44,30 @@ def update_database():
                 conn.execute(text(f"ALTER TABLE vital_signs ADD COLUMN {col_name} {col_type};"))
                 conn.commit()
 
+        # 3. Update EMR Sections table
+        print("Checking emr_sections table...")
+        result = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name='emr_sections' AND column_name='created_at';
+        """)).fetchone()
+        
+        if not result:
+            print("Adding created_at to emr_sections...")
+            conn.execute(text("ALTER TABLE emr_sections ADD COLUMN created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;"))
+            conn.commit()
+
+        # 4. Update Appointments table
+        print("Checking appointments table...")
+        result = conn.execute(text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name='appointments' AND column_name='optimization_diffs';
+        """)).fetchone()
+        
+        if not result:
+            print("Adding optimization_diffs to appointments...")
+            conn.execute(text("ALTER TABLE appointments ADD COLUMN optimization_diffs TEXT;"))
+            conn.commit()
+
         print("Database schema update complete.")
 
 if __name__ == "__main__":
