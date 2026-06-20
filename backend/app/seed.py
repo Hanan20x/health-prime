@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models import ActivityLog, ClinicalOrder, EmrSection, Patient, Provider, VitalSign
+from app.models import ActivityLog, ClinicalOrder, EmrSection, Patient, Provider, VitalSign, Appointment
 from app.security import hash_password
 
 
@@ -197,3 +197,163 @@ def seed_if_empty(db: Session) -> None:
     )
 
     db.commit()
+
+    # Seed appointments if the appointments table is empty
+    if not db.query(Appointment).first():
+        # Get doctor
+        doctor = db.query(Provider).filter(Provider.role == "Doctor").first()
+        if not doctor:
+            doctor = Provider(
+                full_name="Dr. Khalid Al-Rashid",
+                email="khalid.rashid@healthprime.sa",
+                password_hash=hash_password("doctor123"),
+                phone="+966 50 123 4567",
+                gender="Male",
+                role="Doctor",
+                specialty="Family Medicine",
+                license_number="SM-20456",
+                department="Family Medicine",
+                status="Active",
+            )
+            db.add(doctor)
+            db.commit()
+            db.refresh(doctor)
+
+        def get_or_create_patient(first_name, family_name, national_id, dob, phone, gender, status):
+            pat = db.query(Patient).filter(Patient.national_id == national_id).first()
+            if not pat:
+                pat = Patient(
+                    first_name=first_name,
+                    family_name=family_name,
+                    national_id=national_id,
+                    dob=dob,
+                    phone=phone,
+                    gender=gender,
+                    status=status
+                )
+                db.add(pat)
+                db.commit()
+                db.refresh(pat)
+            return pat
+
+        demo_smith = get_or_create_patient("Demo", "Smith", "1111111111", date(1988, 5, 1), "+966 50 111 1111", "Male", "Registered")
+        sample_patient = get_or_create_patient("Sample", "Patient", "2222222222", date(1992, 10, 15), "+966 50 222 2222", "Male", "In Progress")
+        jone_test = get_or_create_patient("Jone", "Test", "9999999999", date(1985, 12, 25), "+966 50 999 9999", "Female", "Registered")
+
+        now_utc = datetime.now(timezone.utc)
+        
+        # Today's appointments (relative to now)
+        today_appts = [
+            Appointment(
+                patient_id=demo_smith.id,
+                provider_id=doctor.id,
+                appointment_date=now_utc.replace(hour=15, minute=30, second=0, microsecond=0),
+                reason="General Consultation",
+                status="Confirmed",
+                is_ai_generated=True,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation",
+                ai_explanation="AI Slot generated based on registered GP preference.",
+                notes="Follow-up checkup for general health."
+            ),
+            Appointment(
+                patient_id=sample_patient.id,
+                provider_id=doctor.id,
+                appointment_date=now_utc.replace(hour=16, minute=30, second=0, microsecond=0),
+                reason="Routine Consultation",
+                status="No Show",
+                is_ai_generated=True,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation",
+                ai_explanation="AI slot confirmed, auto-rescheduled from conflict.",
+                notes="Missed visit."
+            ),
+            Appointment(
+                patient_id=jone_test.id,
+                provider_id=doctor.id,
+                appointment_date=now_utc.replace(hour=17, minute=30, second=0, microsecond=0),
+                reason="Follow up on symptoms",
+                status="Booked",
+                is_ai_generated=True,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation",
+                ai_explanation="AI matching with attending physician.",
+                notes="Discuss lab results."
+            )
+        ]
+        
+        # Upcoming appointments
+        upcoming_appts = [
+            Appointment(
+                patient_id=demo_smith.id,
+                provider_id=doctor.id,
+                appointment_date=(now_utc + timedelta(days=1)).replace(hour=15, minute=30, second=0, microsecond=0),
+                reason="General Consultation",
+                status="Confirmed",
+                is_ai_generated=False,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation"
+            ),
+            Appointment(
+                patient_id=jone_test.id,
+                provider_id=doctor.id,
+                appointment_date=(now_utc + timedelta(days=1)).replace(hour=16, minute=30, second=0, microsecond=0),
+                reason="General Consultation",
+                status="Booked",
+                is_ai_generated=False,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation"
+            ),
+            Appointment(
+                patient_id=demo_smith.id,
+                provider_id=doctor.id,
+                appointment_date=(now_utc + timedelta(days=2)).replace(hour=16, minute=0, second=0, microsecond=0),
+                reason="General Consultation",
+                status="Booked",
+                is_ai_generated=True,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation"
+            ),
+            Appointment(
+                patient_id=jone_test.id,
+                provider_id=doctor.id,
+                appointment_date=(now_utc + timedelta(days=3)).replace(hour=14, minute=30, second=0, microsecond=0),
+                reason="General Consultation",
+                status="Confirmed",
+                is_ai_generated=False,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation"
+            ),
+            Appointment(
+                patient_id=demo_smith.id,
+                provider_id=doctor.id,
+                appointment_date=(now_utc + timedelta(days=3)).replace(hour=15, minute=0, second=0, microsecond=0),
+                reason="General Consultation",
+                status="Confirmed",
+                is_ai_generated=False,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation"
+            ),
+            Appointment(
+                patient_id=jone_test.id,
+                provider_id=doctor.id,
+                appointment_date=(now_utc + timedelta(days=3)).replace(hour=16, minute=0, second=0, microsecond=0),
+                reason="General Consultation",
+                status="Booked",
+                is_ai_generated=False,
+                priority_level="Routine",
+                department="Family Medicine Clinic",
+                visit_type="General Consultation"
+            )
+        ]
+        
+        db.add_all(today_appts + upcoming_appts)
+        db.commit()

@@ -21,6 +21,7 @@ export const t = {
   howAiWorks: { en: "How AI Agents Works", ar: "كيف تعمل وكلاء الذكاء الاصطناعي" },
   howAiWorksDesc: { en: "An overview of our AI-powered ecosystem", ar: "نظرة عامة على نظامنا المعتمد على الذكاء الاصطناعي" },
   staffSchedule: { en: "Healthcare Providers Schedule", ar: "جدول مقدمي الرعاية الصحية" },
+  aboutClinic: { en: "About Alraith PHC", ar: "عن مركز الريث" },
   // Common
   save: { en: "Save", ar: "حفظ" },
   cancel: { en: "Cancel", ar: "إلغاء" },
@@ -274,8 +275,17 @@ export const t = {
   allTimeRegistrations: { en: "All time registrations", ar: "جميع التسجيلات" },
   registeredInSystem: { en: "Registered in system", ar: "مسجلون في النظام" },
   vitalSignsRecorded: { en: "Vital signs recorded", ar: "تم تسجيل العلامات الحيوية" },
-  patient: { en: "Patient", ar: "المريض" },
   by: { en: "By", ar: "بواسطة" },
+
+  completionRate: { en: "Completion Rate", ar: "معدل الإنجاز" },
+  aiOptimized: { en: "AI Optimized", ar: "محسن بالذكاء الاصطناعي" },
+  urgentCases: { en: "Urgent Cases", ar: "الحالات العاجلة" },
+  patientsTodayTitle: { en: "Patients Today", ar: "المرضى اليوم" },
+
+  appointmentsCompleted: { en: "Appointments completed", ar: "المواعيد المنجزة" },
+  schedulesOptimized: { en: "Schedules optimized", ar: "جداول محسنة" },
+  needsImmediateAttention: { en: "Needs immediate attention", ar: "يحتاج انتباه فوري" },
+  distinctScheduledPatients: { en: "Distinct scheduled patients", ar: "مرضى مجدولون مختلفون" },
 
   // Access
   accessDenied: { en: "Access Denied", ar: "الوصول مرفوض" },
@@ -290,11 +300,13 @@ export const t = {
   // Activity Actions
   providerAdded: { en: "Healthcare provider added", ar: "تم إضافة مقدم رعاية" },
   providerUpdated: { en: "Healthcare provider updated", ar: "تم تحديث بيانات مقدم الرعاية" },
-  providerDeleted: { en: "Healthcare provider deleted", ar: "تم حذف مقدم الرعاية" },
+  providerDeletedAction: { en: "Healthcare provider deleted", ar: "تم حذف مقدم الرعاية" },
   vitalsRecorded: { en: "Vital signs recorded", ar: "تم تسجيل العلامات الحيوية" },
   patientRegistered: { en: "New patient registered", ar: "تم تسجيل مريض جديد" },
   patientUpdated: { en: "Patient updated", ar: "تم تحديث بيانات المريض" },
-  by: { en: "by", ar: "بواسطة" },
+  diagnosisAdded: { en: "Diagnosis added", ar: "تمت إضافة تشخيص" },
+  aiDiagnosisAdded: { en: "AI Diagnosis added", ar: "تمت إضافة تشخيص ذكاء اصطناعي" },
+  aiDiagnosisGenerated: { en: "AI Diagnosis generated", ar: "تم إنشاء تشخيص بواسطة الذكاء الاصطناعي" },
 
   // EMR Sections
   chiefComplaints: { en: "Chief Complaints", ar: "الشكوى الرئيسية" },
@@ -328,7 +340,6 @@ export const t = {
   noPatientSelected: { en: "No Patient Selected", ar: "لم يتم اختيار مريض" },
   browsePatientRecords: { en: "Browse Patient Records", ar: "تصفح سجلات المرضى" },
   emrAccessDesc: { en: "To view a Clinical Record, please go to the Patients list and select a specific individual.", ar: "لعرض السجل السريري، يرجى الانتقال إلى قائمة المرضى واختيار مريض محدد." },
-  profileUpdated: { en: "Profile updated successfully", ar: "تم تحديث الملف الشخصي بنجاح" },
   proIdentityDesc: { en: "Keep your professional identity consistent across the platform.", ar: "حافظ على اتساق هويتك المهنية عبر المنصة." },
   failedUpdateProfile: { en: "Failed to update profile", ar: "فشل تحديث الملف الشخصي" },
   uploadPictureError: { en: "Failed to upload image", ar: "فشل تحميل الصورة" },
@@ -375,11 +386,8 @@ export const t = {
   imaging: { en: "Imaging", ar: "الأشعة" },
   prescription: { en: "Prescription", ar: "الوصفة الطبية" },
 
-  prescription: { en: "Prescription", ar: "الوصفة الطبية" },
   lastMeasure: { en: "Last", ar: "آخر قياس" },
-  medicalRegistry: { en: "Medical Registry", ar: "السجل الطبي" },
   historicalObservations: { en: "Historical medical observations", ar: "الملاحظات الطبية التاريخية" },
-  searchRegistry: { en: "Search Registry...", ar: "البحث في السجل..." },
   tprChart: { en: "TPR Chart", ar: "مخطط TPR" },
   bpTrends: { en: "Blood Pressure Trends", ar: "اتجاهات ضغط الدم" },
   physMetrics: { en: "Physical Metrics", ar: "المقاييس البدنية" },
@@ -407,7 +415,6 @@ export const t = {
   manualBookings: { en: "Staff Manual Bookings", ar: "الحجوزات اليدوية" },
   aiOptimizedSlots: { en: "AI Optimized Slots", ar: "المواعيد المحسنة" },
   manageAppointmentsDesc: { en: "Manage and Register Appointments", ar: "إدارة وتسجيل المواعيد" },
-  selectPatient: { en: "Select Patient", ar: "اختر المريض" },
   selectProvider: { en: "Select Provider", ar: "اختر مزود الرعاية" },
   appointmentRegisteredSuccess: { en: "Appointment registered successfully", ar: "تم تسجيل الموعد بنجاح" },
   aiSlotSuccess: { en: "AI slot generated & registered successfully", ar: "تم إنشاء موعد الذكاء الاصطناعي بنجاح" },
@@ -429,20 +436,18 @@ export const t = {
   urgent: { en: "Urgent", ar: "عاجل" },
   high: { en: "High", ar: "مرتفع" },
   routine: { en: "Routine", ar: "روتيني" },
-
+ 
   // Errors & Warnings
-  failedLoadPatients: { en: "Failed to load patients", ar: "فشل تحميل قائمة المرضى" },
-  failedLoadProviders: { en: "Failed to load providers", ar: "فشل تحميل قائمة مقدمي الرعاية" },
-
+ 
   // Relative Time Components
   ago: { en: "ago", ar: "منذ" },
   min: { en: "min", ar: "دقيقة" },
   mins: { en: "mins", ar: "دقيقة" },
-  hr: { en: "hr", ar: "ساعة" },
+  hrRelative: { en: "hr", ar: "ساعة" },
   hrs: { en: "hrs", ar: "ساعة" },
   day: { en: "day", ar: "يوم" },
   days: { en: "days", ar: "يوم" },
-
+ 
   // Statuses
   active: { en: "Active", ar: "نشط" },
   inactive: { en: "Inactive", ar: "غير نشط" },
@@ -450,12 +455,12 @@ export const t = {
   dischargedStatus: { en: "Discharged", ar: "مُخرَّج" },
   registeredStatus: { en: "Registered", ar: "مسجل" },
   inProgressStatus: { en: "In Progress", ar: "قيد المعالجة" },
-
+ 
   // Role names as values
   doctorRole: { en: "Doctor", ar: "طبيب" },
   nurseRole: { en: "Nurse", ar: "ممرض/ة" },
   adminRole: { en: "E-Health Admin", ar: "مدير النظام" },
-
+ 
   // Specialities
   familySpecialty: { en: "Family Medicine", ar: "طب الأسرة" },
   internalSpecialty: { en: "Internal Medicine", ar: "الطب الباطني" },
@@ -464,9 +469,8 @@ export const t = {
   generalSpecialty: { en: "General", ar: "عام" },
   administrationSpecialty: { en: "Administration", ar: "إدارة" },
   itSpecialty: { en: "IT", ar: "تقنية المعلومات" },
-
+ 
   // Errors & Warnings
-  accessDenied: { en: "Access Denied", ar: "تم رفض الوصول" },
   accessDeniedDesc: {
     en: "You don't have permission to access this page.",
     ar: "ليس لديك صلاحية الوصول لهذه الصفحة.",
@@ -541,6 +545,10 @@ export function txStatTitle(title: string, lang: Lang): string {
     "Today's Vitals": "todaysVitals",
     "Total Patients": "totalPatients",
     "Total Healthcare Providers": "totalHealthcareProviders",
+    "Completion Rate": "completionRate",
+    "AI Optimized": "aiOptimized",
+    "Urgent Cases": "urgentCases",
+    "Patients Today": "patientsTodayTitle",
   };
   
   const key = titleMap[title];
@@ -553,6 +561,10 @@ export function txStatDesc(description: string, lang: Lang): string {
     "Recorded today": "recordedToday",
     "All time registrations": "allTimeRegistrations",
     "Registered in system": "registeredInSystem",
+    "Appointments completed": "appointmentsCompleted",
+    "Schedules optimized": "schedulesOptimized",
+    "Needs immediate attention": "needsImmediateAttention",
+    "Distinct scheduled patients": "distinctScheduledPatients",
   };
   
   const key = descMap[description];
@@ -575,14 +587,32 @@ export function txAction(action: string, lang: Lang): string {
   const actionMap: Record<string, keyof typeof t> = {
     "Healthcare provider added": "providerAdded",
     "Healthcare provider updated": "providerUpdated",
-    "Healthcare provider deleted": "providerDeleted",
+    "Healthcare provider deleted": "providerDeletedAction",
     "Vital signs recorded": "vitalsRecorded",
     "New patient registered": "patientRegistered",
     "Patient updated": "patientUpdated",
+    "Diagnosis added": "diagnosisAdded",
+    "AI Diagnosis (LLM) generated": "aiDiagnosisGenerated",
   };
   
-  const key = actionMap[action];
-  return key ? tx(key, lang) : action;
+  if (actionMap[action]) {
+    return tx(actionMap[action], lang);
+  }
+  
+  if (action.startsWith("AI Diagnosis generated")) {
+    const code = action.replace("AI Diagnosis generated", "").trim();
+    return `${tx("aiDiagnosisGenerated", lang)} ${code}`;
+  }
+  if (action.startsWith("AI Diagnosis added")) {
+    const code = action.replace("AI Diagnosis added", "").trim();
+    return `${tx("aiDiagnosisAdded", lang)} ${code}`;
+  }
+  if (action.startsWith("Diagnosis added")) {
+    const code = action.replace("Diagnosis added", "").trim();
+    return `${tx("diagnosisAdded", lang)} ${code}`;
+  }
+
+  return action;
 }
 
 export function txRelativeTime(timeStr: string, lang: Lang): string {
@@ -593,9 +623,10 @@ export function txRelativeTime(timeStr: string, lang: Lang): string {
   if (parts.length < 3) return timeStr;
   
   const val = parts[0];
-  const unit = parts[1] as keyof typeof t;
-  // parts[2] is "ago"
+  const unit = parts[1];
+  let unitKey: keyof typeof t = unit as keyof typeof t;
+  if (unit === "hr") unitKey = "hrRelative";
   
-  const arUnit = t[unit]?.ar || unit;
+  const arUnit = t[unitKey]?.ar || unit;
   return `منذ ${val} ${arUnit}`;
 }

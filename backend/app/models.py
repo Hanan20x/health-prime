@@ -74,6 +74,22 @@ class Patient(Base):
     vitals: Mapped[list[VitalSign]] = relationship(back_populates="patient")
     emr_sections: Mapped[list[EmrSection]] = relationship(back_populates="patient", cascade="all, delete-orphan")
     orders: Mapped[list[ClinicalOrder]] = relationship(back_populates="patient", cascade="all, delete-orphan")
+    diagnoses: Mapped[list[PatientDiagnosis]] = relationship(back_populates="patient", cascade="all, delete-orphan")
+
+
+class PatientDiagnosis(Base):
+    __tablename__ = "patient_diagnoses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
+    icd_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    icd_title: Mapped[str] = mapped_column(String(255), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="Active")
+    diagnosed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    patient: Mapped[Patient] = relationship(back_populates="diagnoses")
 
 
 class VitalSign(Base):
@@ -117,6 +133,20 @@ class EmrSection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     patient: Mapped[Patient] = relationship(back_populates="emr_sections")
+
+
+class EmrSectionHistory(Base):
+    """Immutable audit trail — one row per edit of an EmrSection."""
+    __tablename__ = "emr_section_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    emr_section_id: Mapped[int] = mapped_column(ForeignKey("emr_sections.id", ondelete="CASCADE"), index=True)
+    patient_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    section_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    old_content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    edited_by: Mapped[str] = mapped_column(String(255), nullable=False)  # provider full_name
+    edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
 
 
 class ClinicalOrder(Base):

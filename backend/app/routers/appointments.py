@@ -1,21 +1,34 @@
 from datetime import datetime, timedelta
 import random
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from typing import List
+from typing import Annotated, List
 
 from app.database import get_db
-from app.models import Appointment, Patient, Provider
-from app.schemas import AppointmentCreate, AppointmentOut, AppointmentGenerateSpec, UserOut
+from app.deps import CurrentUser
+from app.models import ActivityLog, Appointment, Patient, Provider
+from app.schemas import AppointmentCreate, AppointmentOut, AppointmentGenerateSpec, UserOut, AppointmentStatusUpdate
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
 
+# Configurable appointment slot duration in minutes.
+# Conflict detection uses half this value on each side of the requested time.
+SLOT_DURATION_MIN: int = 30
+
 @router.get("/", response_model=List[AppointmentOut])
-def get_appointments(db: Session = Depends(get_db)):
-    # Basic method to get all appointments
-    stmt = select(Appointment)
+def get_appointments(
+    _user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(200, ge=1, le=500, description="Max records to return"),
+    status: str | None = Query(None, description="Filter by status: Scheduled, Completed, Cancelled"),
+):
+    stmt = select(Appointment).order_by(Appointment.appointment_date.desc())
+    if status:
+        stmt = stmt.where(Appointment.status == status)
+    stmt = stmt.offset(skip).limit(limit)
     appointments = db.scalars(stmt).all()
     
     out = []
@@ -43,9 +56,40 @@ def get_appointments(db: Session = Depends(get_db)):
         ))
     return out
 
+@router.patch("/{appointment_id}/status", response_model=AppointmentOut)
+def update_appointment_status(appointment_id: int, req: AppointmentStatusUpdate, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
+    db_appt = db.query(Appointment).filter(Appointment.id == appointment_id).first()
+    if not db_appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+        
+    db_appt.status = req.status
+    db.commit()
+    db.refresh(db_appt)
+    
+    pat = db.get(Patient, db_appt.patient_id)
+    prov = db.get(Provider, db_appt.provider_id)
+    
+    return AppointmentOut(
+        id=db_appt.id,
+        patient_id=db_appt.patient_id,
+        provider_id=db_appt.provider_id,
+        appointment_date=db_appt.appointment_date,
+        reason=db_appt.reason,
+        status=db_appt.status,
+        notes=db_appt.notes,
+        department=db_appt.department,
+        visit_type=db_appt.visit_type,
+        is_ai_generated=db_appt.is_ai_generated,
+        priority_level=db_appt.priority_level,
+        ai_explanation=db_appt.ai_explanation,
+        manual_slots_affected=db_appt.manual_slots_affected,
+        optimization_diffs=db_appt.optimization_diffs,
+        patient_name=f"{pat.first_name} {pat.family_name}" if pat else "Unknown",
+        provider_name=prov.full_name if prov else "Unknown"
+    )
 
 @router.post("/", response_model=AppointmentOut)
-def register_appointment(appt_in: AppointmentCreate, db: Session = Depends(get_db)):
+def register_appointment(appt_in: AppointmentCreate, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
     pat = db.get(Patient, appt_in.patient_id)
     if not pat:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -94,7 +138,7 @@ def register_appointment(appt_in: AppointmentCreate, db: Session = Depends(get_d
     )
 
 @router.put("/{appointment_id}", response_model=AppointmentOut)
-def update_appointment(appointment_id: int, req: AppointmentCreate, db: Session = Depends(get_db)):
+def update_appointment(appointment_id: int, req: AppointmentCreate, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
     db_appt = db.query(Appointment).filter(Appointment.id == appointment_id).first()
     if not db_appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
@@ -115,6 +159,8 @@ def update_appointment(appointment_id: int, req: AppointmentCreate, db: Session 
         db_appt.manual_slots_affected = req.manual_slots_affected
     if hasattr(req, "optimization_diffs") and req.optimization_diffs is not None:
         db_appt.optimization_diffs = req.optimization_diffs
+    if hasattr(req, "status") and req.status is not None:
+        db_appt.status = req.status
         
     db.commit()
     db.refresh(db_appt)
@@ -142,14 +188,15 @@ def update_appointment(appointment_id: int, req: AppointmentCreate, db: Session 
     )
 
 @router.delete("/{appointment_id}")
-def delete_appointment(appointment_id: int, db: Session = Depends(get_db)):
+def delete_appointment(appointment_id: int, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
     db_appt = db.get(Appointment, appointment_id)
     if not db_appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
         
-    db.delete(db_appt)
+    db_appt.status = "Cancelled"
     db.commit()
-    return {"message": "Appointment deleted successfully"}
+    db.refresh(db_appt)
+    return {"message": "Appointment cancelled successfully"}
 
 @router.delete("/cleanup")
 def cleanup_invalid_appointments(db: Session = Depends(get_db)):
@@ -266,6 +313,7 @@ OPERATING PRINCIPLES (override everything below if in conflict)
 4. You assist, you don't decide. Every suggestion is a recommendation the nurse can accept or reject.
 5. Audit everything. Output is logged with the nurse's accept/reject. Use only the minimum EMR fields the decision requires.
 6. You are not a diagnostic tool and not a substitute for clinical judgment.
+7. CRITICAL: DO NOT HALLUCINATE OR INVENT VITALS. If a temperature, BP, or other vital is not explicitly provided in the INPUTS, do not make one up. If the EMR mentions "fever" but no temperature is given, say "history of fever", NOT a specific degree.
 
 INPUTS
 - visit_type: {state.staff_entry.get('Visit Type', 'Unknown')}
@@ -274,6 +322,7 @@ INPUTS
 - nurse_selected_provider: {state.staff_entry.get('Doctor', 'Any Provider')}
 - requested_datetime: {state.staff_entry.get('Date', '')} {state.staff_entry.get('Time', '')}
 - vitals and emr: {state.medical_history}
+- available_doctors: {state.staff_entry.get('available_doctors', 'Unknown')}
 
 PRIORITY TIERS & SLA
 - Urgent  -> see within 4 hours (Phase1)
@@ -302,10 +351,11 @@ final_priority = max(nurse_selected_priority, ai_suggested_priority)
 - ai = nurse -> keep; no flag.
 
 STEP 4 - DOCTOR ASSIGNMENT
-candidates = doctors clinically appropriate
-If nurse_selected_provider is set, assign it (if in candidates), else assign but FLAG(slot_or_fit_conflict, severity=medium).
+candidates = doctors clinically appropriate from available_doctors
+If the patient has an acute or urgent condition (e.g. asthma attack, severe pain) and nurse_selected_provider is a Nurse, you MUST reassign them to a Doctor. FLAG(slot_or_fit_conflict, severity=medium), provider_action=REASSIGN, and set recommended_provider to an appropriate doctor.
+If nurse_selected_provider is a Doctor and is appropriate, keep it.
 Elif registered GP is in candidates, assign that doctor.
-Else assign earliest doctor; FLAG(continuity_overridden, severity=low).
+Else assign earliest appropriate doctor; FLAG(continuity_overridden, severity=low).
 
 STEP 5 - FLAG AGGREGATION & OUTPUT
 Weight flags by severity. If zero flags, confirm with "no issues detected. You've selected {state.staff_entry.get('Doctor')} for this appointment. This is optimal based on doctor availability and suitability for the patient case."
@@ -325,27 +375,33 @@ workflow.add_edge("suggest", END)
 health_agent = workflow.compile()
 
 @router.post("/optimize", response_model=OptimizationReview)
-def optimize_appointment_slot(req: OptimizationRequest, db: Session = Depends(get_db)):
+def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
     pat = db.get(Patient, req.patient_id)
     if not pat:
         raise HTTPException(status_code=404, detail="Patient not found")
         
     prov_name = "Unknown"
     prov_specialty = "Unknown Specialty"
+    prov_role = "Unknown Role"
     if req.provider_id:
         prov = db.get(Provider, req.provider_id)
         if prov: 
             prov_name = prov.full_name
             prov_specialty = prov.specialty
+            prov_role = prov.role
+            
+    active_doctors = db.query(Provider).filter(Provider.role == 'Doctor').all()
+    doctors_list = ", ".join([f"{d.full_name} ({d.specialty})" for d in active_doctors])
         
     staff_entry = {
         "Priority": req.priority_level,
-        "Doctor": f"{prov_name} ({prov_specialty})",
+        "Doctor": f"{prov_name} (Role: {prov_role}, Specialty: {prov_specialty})",
         "Date": req.appointment_date,
         "Time": req.time_str,
         "Reason": req.reason,
         "Department": req.department,
-        "Visit Type": req.visit_type
+        "Visit Type": req.visit_type,
+        "available_doctors": doctors_list
     }
     
     # Call the LLM agent
@@ -361,7 +417,7 @@ def optimize_appointment_slot(req: OptimizationRequest, db: Session = Depends(ge
         is_soon_reason = any(kw in reason_lower for kw in ["infection", "pain", "vomiting", "fracture", "swelling", "cough"])
         
         # Check vitals from medical history for fever
-        has_fever = "39.5" in state.medical_history or "fever" in state.medical_history.lower()
+        has_fever = "39.5" in state.medical_history or "fever" in state.medical_history.lower() or "temperature_c" in state.medical_history
         if has_fever:
             is_urgent_reason = True
 
@@ -370,8 +426,8 @@ def optimize_appointment_slot(req: OptimizationRequest, db: Session = Depends(ge
             priority_flag = req.priority_level != "Urgent"
             if priority_flag:
                 priority_reasoning = (
-                    f"I reviewed the patient's recent vitals and noticed a temperature of 39.5°C. "
-                    f"Our clinic policy says high fevers should be flagged as Urgent (Phase1) so the patient is seen within 4 hours. "
+                    f"I reviewed the patient's recent vitals and medical history and noticed signs of acute illness (e.g. fever or severe symptoms). "
+                    f"Our clinic policy says such conditions should be flagged as Urgent (Phase1) so the patient is seen within 4 hours. "
                     f"Right now it's set to \"{req.priority_level or 'Routine'}\" — I strongly recommend changing this to Urgent."
                 )
             else:
@@ -445,6 +501,63 @@ def optimize_appointment_slot(req: OptimizationRequest, db: Session = Depends(ge
         
     priority_flag = ai_response.get("priority_action") not in ["KEEP", None, ""]
     doctor_flag = ai_response.get("provider_action") not in ["KEEP", None, ""]
+    suggested_provider_name = ai_response.get("recommended_provider") if doctor_flag else prov_name
+    
+    # Conflict checking logic
+    target_prov_id = req.provider_id
+    if doctor_flag and suggested_provider_name:
+        from sqlalchemy import select
+        # Simple name match to find suggested provider ID
+        matched = db.query(Provider).filter(Provider.full_name.ilike(f"%{suggested_provider_name}%")).first()
+        if matched:
+            target_prov_id = matched.id
+            
+    suggested_date = "KEEP"
+    suggested_time = "KEEP"
+    date_flag = False
+    time_flag = False
+    date_reasoning = "The selected date is optimal. It falls within standard PHC operating hours."
+    time_reasoning = "The selected time slot is optimal and has confirmed availability with no scheduling conflicts."
+    manual_slots_affected = None
+    
+    if target_prov_id and req.appointment_date and req.time_str:
+        try:
+            from datetime import datetime, timedelta
+            req_dt = datetime.strptime(f"{req.appointment_date} {req.time_str}", "%Y-%m-%d %H:%M")
+            
+            temp_date = req_dt
+            attempts = 0
+            conflict_found = False
+            
+            while attempts < 20:
+                half = SLOT_DURATION_MIN - 1
+                start_win = temp_date - timedelta(minutes=half)
+                end_win = temp_date + timedelta(minutes=half)
+                conflicts = db.query(Appointment).filter(
+                    Appointment.provider_id == target_prov_id,
+                    Appointment.appointment_date >= start_win,
+                    Appointment.appointment_date <= end_win,
+                    Appointment.status == "Scheduled"
+                ).all()
+                
+                if not conflicts:
+                    break
+                    
+                conflict_found = True
+                temp_date += timedelta(minutes=SLOT_DURATION_MIN)
+                attempts += 1
+                
+            if conflict_found:
+                time_flag = True
+                suggested_time = temp_date.strftime("%H:%M")
+                if temp_date.date() != req_dt.date():
+                    date_flag = True
+                    suggested_date = temp_date.strftime("%Y-%m-%d")
+                    date_reasoning = "Shifted to the next available day due to schedule conflicts."
+                time_reasoning = "Conflict detected with an existing appointment. Shifted to the next available slot to prevent double-booking."
+                manual_slots_affected = f"Bypassed {attempts} conflicting slot(s) to find availability."
+        except Exception as e:
+            print(f"Time parse error: {e}")
     
     diffs_out = [
         {
@@ -457,33 +570,45 @@ def optimize_appointment_slot(req: OptimizationRequest, db: Session = Depends(ge
         {
             "field": "Doctor",
             "staff_entry": prov_name,
-            "ai_suggestion": ai_response.get("recommended_provider") if doctor_flag else "KEEP",
+            "ai_suggestion": suggested_provider_name if doctor_flag else "KEEP",
             "flag": doctor_flag,
             "reasoning": get_reasoning(["slot_or_fit_conflict", "continuity_overridden"]) or ("Consider assigning the recommended provider." if doctor_flag else f"You've selected {prov_name} ({prov_specialty}) for this appointment. This is optimal based on doctor availability and suitability for the patient case.")
         },
         {
             "field": "Date",
             "staff_entry": req.appointment_date or "Not Specified",
-            "ai_suggestion": "KEEP",
-            "flag": False,
-            "reasoning": "The selected date is optimal. It falls within standard PHC operating hours (8:00 AM to 5:00 PM) and has confirmed availability with no scheduling conflicts."
+            "ai_suggestion": suggested_date,
+            "flag": date_flag,
+            "reasoning": date_reasoning
         },
         {
             "field": "Time",
             "staff_entry": req.time_str or "Not Specified",
-            "ai_suggestion": "KEEP",
-            "flag": False,
-            "reasoning": "The selected time slot is optimal. It falls within standard PHC operating hours (8:00 AM to 5:00 PM) and has confirmed availability with no scheduling conflicts."
+            "ai_suggestion": suggested_time,
+            "flag": time_flag,
+            "reasoning": time_reasoning
         }
     ]
     
+    ai_exp = ai_response.get("nurse_summary") or "AI Review completed."
+    if manual_slots_affected:
+        ai_exp += f" ({manual_slots_affected})"
+
+    # Log AI optimization action
+    db.add(ActivityLog(
+        action="AI Appointment Optimization reviewed",
+        patient_name=f"Patient #{req.patient_id}",
+        provider_name=f"{_user.full_name} ({_user.role})"
+    ))
+    db.commit()
+    
     return OptimizationReview(
         diffs=diffs_out,
-        ai_explanation=ai_response.get("nurse_summary") or "AI Review completed."
+        ai_explanation=ai_exp
     )
 
 @router.post("/generate-slot", response_model=AppointmentOut)
-def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, db: Session = Depends(get_db)):
+def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
     pat = db.get(Patient, spec.patient_id)
     if not pat:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -521,7 +646,7 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, db: Session = Depe
                 
         date_obj = existing_appt.appointment_date
         
-        if not os.environ.get("GOOGLE_API_KEY"):
+        if not os.environ.get("GROQ_API_KEY"):
             reason_lower = spec.reason.lower()
             if any(kw in reason_lower for kw in ["chest pain", "breathing", "severe", "fever", "emergency"]):
                 priority_level = "High" if "fever" in reason_lower else "Urgent"
@@ -572,7 +697,7 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, db: Session = Depe
             
     # 2. Otherwise we generate a new slot
     else:
-        if not os.environ.get("GOOGLE_API_KEY"):
+        if not os.environ.get("GROQ_API_KEY"):
             reason_lower = spec.reason.lower()
             if any(kw in reason_lower for kw in ["chest pain", "breathing", "severe", "fever", "emergency"]):
                 priority_level = "High" if "fever" in reason_lower else "Urgent"
@@ -659,8 +784,9 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, db: Session = Depe
     max_attempts = 20
     attempts = 0
     while attempts < max_attempts:
-        start_win = temp_date - timedelta(minutes=29)
-        end_win = temp_date + timedelta(minutes=29)
+        half = SLOT_DURATION_MIN - 1
+        start_win = temp_date - timedelta(minutes=half)
+        end_win = temp_date + timedelta(minutes=half)
         
         # Check database for overlapping appointments for this provider
         stmt = select(Appointment).where(
@@ -691,8 +817,8 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, db: Session = Depe
             formatted_time = c.appointment_date.strftime("%I:%M %p (%Y-%m-%d)")
             conflicting_slots_info.append(f"{slot_type} with {prov.full_name} for patient {pat_name} at {formatted_time}")
             
-        # Shift slot by 30 minutes forward and check again
-        temp_date = temp_date + timedelta(minutes=30)
+        # Shift slot forward by one slot duration and check again
+        temp_date = temp_date + timedelta(minutes=SLOT_DURATION_MIN)
         attempts += 1
         
     # Construct manual_slots_affected explanation

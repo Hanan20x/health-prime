@@ -13,6 +13,12 @@ import {
   BarChart3,
   Activity,
   Stethoscope,
+  Calendar,
+  Clock,
+  AlertCircle,
+  CheckCircle,
+  TrendingUp,
+  Brain,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { apiFetch } from "@/api/client";
@@ -35,8 +41,36 @@ export default function DashboardPage() {
     queryFn: () => apiFetch<DashboardSummary>("/dashboard/summary"),
   });
 
-  const userName = me?.fullName?.split(/\s+/)[0] ?? "";
-  const welcomeName = role && userName ? `${txRole(role, lang)} ${userName}` : userName || "";
+  let welcomeName = "";
+  if (me?.fullName) {
+    const parts = me.fullName.split(/\s+/);
+    const isDr = parts[0].toLowerCase().replace(".", "") === "dr";
+    const firstName = isDr && parts.length > 1 ? `${parts[0]} ${parts[1]}` : parts[0];
+    
+    if (isDr || role === "Doctor") {
+      welcomeName = isDr ? firstName : `Dr. ${firstName}`;
+    } else {
+      welcomeName = role ? `${txRole(role, lang)} ${firstName}` : firstName;
+    }
+  }
+
+  // Dynamic icon based on index and user role
+  const getIconForIdx = (i: number) => {
+    if (role === "Doctor") {
+      // Completion Rate, AI Optimized, Urgent Cases, Patients Today
+      return [CheckCircle, TrendingUp, AlertCircle, UserRound][i] ?? Users;
+    } else if (role === "Nurse") {
+      // Vitals Today, Today's Bookings, Alert Cases
+      return [HeartPulse, Calendar, AlertCircle][i] ?? Users;
+    } else {
+      // Active Providers, Total Patients, Today's Bookings, AI Resolved, Shift Coverage, System Logs
+      return [Users, UserRound, Calendar, TrendingUp, UserCheck, AlertCircle][i] ?? Users;
+    }
+  };
+
+  let gridColsClass = "lg:grid-cols-3";
+  if (role === "Doctor") gridColsClass = "lg:grid-cols-4";
+  else if (role === "E-Health Admin") gridColsClass = "lg:grid-cols-3 xl:grid-cols-6";
 
   return (
     <DashboardLayout>
@@ -51,15 +85,14 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 ${gridColsClass} gap-4 mb-8`}>
         {isLoading &&
-          Array.from({ length: 4 }).map((_, i) => (
+          Array.from({ length: role === "Doctor" ? 4 : (role === "E-Health Admin" ? 6 : 3) }).map((_, i) => (
             <Skeleton key={i} className="h-[120px] rounded-lg" />
           ))}
         {!isLoading &&
           data?.stats.map((s, idx) => {
-            const icons = [Users, UserRound, HeartPulse, UserCheck];
-            const Icon = icons[idx] ?? Users;
+            const Icon = getIconForIdx(idx);
             return (
               <StatCard
                 key={s.title}
@@ -90,7 +123,7 @@ export default function DashboardPage() {
               <Stethoscope className="w-4 h-4" /> {tx("recordVitals", lang)}
             </Button>
           )}
-          <Button onClick={() => navigate("/vitals/charts")} variant="outline" className="gap-2">
+          <Button onClick={() => navigate("/vitals/record?view=trends")} variant="outline" className="gap-2">
             <BarChart3 className="w-4 h-4" /> {tx("viewCharts", lang)}
           </Button>
         </div>
@@ -108,20 +141,63 @@ export default function DashboardPage() {
             ))}
           </div>
         )}
-        {!isLoading &&
+        {!isLoading && data?.activity?.length === 0 && (
+          <div className="px-5 py-8 text-center text-sm text-muted-foreground">
+            {tx("noData", lang)}
+          </div>
+        )}
+        {!isLoading && data?.activity && data.activity.length > 0 &&
           <div className="divide-y divide-border">
-            {data.activity.map((item) => (
-              <div key={item.id} className="px-5 py-3 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{txAction(item.action, lang)}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {item.patient !== "—" && `${tx("patient", lang)}: ${item.patient} · `}
-                    {tx("by", lang)} {item.provider}
-                  </p>
+            {data.activity.map((item) => {
+              const isAI = item.action.includes("AI Diagnosis");
+              const isManualDiag = item.action.includes("Diagnosis") && !isAI;
+              
+              return (
+                <div key={item.id} className="px-5 py-3 flex items-center justify-between gap-4 hover:bg-muted/30 transition-colors">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {/* Add an icon based on action type */}
+                    {isAI ? (
+                      <div className="bg-primary/10 p-2 rounded-full flex-shrink-0">
+                        <Brain className="w-4 h-4 text-primary" />
+                      </div>
+                    ) : isManualDiag ? (
+                      <div className="bg-blue-500/10 p-2 rounded-full flex-shrink-0">
+                        <Stethoscope className="w-4 h-4 text-blue-500" />
+                      </div>
+                    ) : (
+                      <div className="bg-muted p-2 rounded-full flex-shrink-0">
+                        <Activity className="w-4 h-4 text-muted-foreground" />
+                      </div>
+                    )}
+                    
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium flex items-center flex-wrap gap-2">
+                        {txAction(item.action, lang)}
+                        {isAI && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary uppercase tracking-widest border border-primary/20">
+                            AI Generated
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {item.patient !== "—" && (
+                          <span className="font-semibold text-foreground/80 mr-1.5">
+                            {item.patient}
+                          </span>
+                        )}
+                        {item.patient !== "—" && "· "}
+                        {isManualDiag || isAI ? (
+                          <span>{item.provider}</span>
+                        ) : (
+                          <span>{tx("by", lang)} {item.provider}</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{txRelativeTime(item.time, lang)}</span>
                 </div>
-                <span className="text-xs text-muted-foreground whitespace-nowrap">{txRelativeTime(item.time, lang)}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         }
       </div>

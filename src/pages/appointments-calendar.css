@@ -1,0 +1,79 @@
+/* Custom styles for React Big Calendar */
+
+.rbc-calendar {
+  font-family: inherit;
+}
+
+.rbc-event {
+  padding: 2px 5px !important;
+  font-size: 11px !important;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.rbc-event:hover {
+  transform: translateY(-0.5px);
+  box-shadow: 0 4px 6px rgba(0,0,0,0.08);
+}
+
+.rbc-today {
+  background-color: rgba(20, 184, 166, 0.04) !important;
+}
+
+.rbc-off-range-bg {
+  background: #fafafa !important;
+}
+
+.rbc-header {
+  padding: 8px 3px !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  color: #64748b !important;
+  border-bottom: 2px solid #e2e8f0 !important;
+}
+
+.rbc-time-header {
+  border-bottom: 2px solid #e2e8f0 !important;
+}
+
+.rbc-day-bg + .rbc-day-bg {
+  border-left: 1px solid #f1f5f9 !important;
+}
+
+.rbc-month-row {
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+
+.rbc-month-view {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  background: white !important;
+}
+
+.rbc-time-view {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  background: white !important;
+}
+
+.rbc-timeslot-group {
+  border-bottom: 1px solid #f1f5f9 !important;
+  min-height: 45px !important;
+}
+
+.rbc-time-content {
+  border-top: 2px solid #e2e8f0 !important;
+}
+
+.rbc-agenda-view table.rbc-agenda-table {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+}
+
+.rbc-agenda-view table.rbc-agenda-table tbody > tr > td {
+  padding: 12px 16px !important;
+  font-size: 13px !important;
+}

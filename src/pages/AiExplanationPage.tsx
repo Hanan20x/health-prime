@@ -26,9 +26,9 @@ export default function AiExplanationPage() {
 
       <div className="space-y-8 pb-8">
         {/* Introduction Section */}
-        <section className="bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-indigo-950/20 dark:to-blue-950/20 border border-indigo-100 dark:border-indigo-900/50 rounded-2xl p-6 md:p-8 shadow-sm">
+        <section className="bg-gradient-to-br from-primary/5 to-primary/10 dark:from-primary/10 dark:to-primary/20 border border-primary/20 rounded-2xl p-6 md:p-8 shadow-sm">
           <div className="flex items-start gap-4">
-            <div className="bg-indigo-600 text-white p-3 rounded-xl shadow-md shrink-0">
+            <div className="bg-primary text-primary-foreground p-3 rounded-xl shadow-md shrink-0">
               <Brain className="w-8 h-8" />
             </div>
             <div>
@@ -44,9 +44,9 @@ export default function AiExplanationPage() {
           </div>
 
           <div className="grid md:grid-cols-2 gap-6 mt-8">
-            <Card className="border-indigo-200 shadow-sm bg-white/60 dark:bg-slate-900/60 backdrop-blur">
+            <Card className="border-primary/20 shadow-sm bg-white/60 dark:bg-slate-900/60 backdrop-blur">
               <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-indigo-700 dark:text-indigo-400">
+                <CardTitle className="flex items-center gap-2 text-primary">
                   <CalendarCheck className="w-5 h-5" />
                   {lang === "ar" ? "وكيل الجدولة الذكي" : "Scheduling AI Agent"}
                 </CardTitle>
@@ -61,9 +61,9 @@ export default function AiExplanationPage() {
               </CardContent>
             </Card>
 
-            <Card className="border-teal-200 shadow-sm bg-white/60 dark:bg-slate-900/60 backdrop-blur opacity-80">
+            <Card className="border-amber-200 shadow-sm bg-white/60 dark:bg-slate-900/60 backdrop-blur opacity-80">
               <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-teal-700 dark:text-teal-400">
+                <CardTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-500">
                   <Stethoscope className="w-5 h-5" />
                   {lang === "ar" ? "وكيل المساعدة التشخيصية" : "Diagnostic Assistance AI Agent"}
                 </CardTitle>
@@ -82,7 +82,7 @@ export default function AiExplanationPage() {
 
         {/* Scheduling AI Detail Section */}
         <div className="flex items-center gap-2 mb-6 mt-12 px-2">
-          <CalendarCheck className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
+          <CalendarCheck className="w-6 h-6 text-primary" />
           <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
             {lang === "ar" ? "تفاصيل: كيف يعمل وكيل الجدولة الذكي" : "Deep Dive: How the Scheduling AI Agent Works"}
           </h2>
@@ -93,7 +93,7 @@ export default function AiExplanationPage() {
           <div className="lg:col-span-1 space-y-6">
             <Card className="shadow-sm border-slate-200 dark:border-slate-800 h-full">
               <CardHeader>
-                <div className="w-10 h-10 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-lg flex items-center justify-center mb-4">
+                <div className="w-10 h-10 bg-primary/10 text-primary rounded-lg flex items-center justify-center mb-4">
                   <ShieldCheck className="w-5 h-5" />
                 </div>
                 <CardTitle className="text-lg">
@@ -108,20 +108,20 @@ export default function AiExplanationPage() {
                 </p>
                 <ul className="space-y-3">
                   <li className="flex gap-2 items-start">
-                    <span className="font-bold text-emerald-600">1.</span>
-                    <span>{lang === "ar" ? "يقوم الموظف بتعبئة بيانات الموعد بناءً على التقييم المبدئي." : "Staff fills out the appointment form based on their triage."}</span>
+                    <span className="font-bold text-primary">1.</span>
+                    <span>{lang === "ar" ? "يقوم الموظف بتعبئة بيانات الموعد بناءً على التقييم المبدئي." : "Staff fills out the appointment form based on their manual triage."}</span>
                   </li>
                   <li className="flex gap-2 items-start">
-                    <span className="font-bold text-emerald-600">2.</span>
-                    <span>{lang === "ar" ? "ينقر الموظف على 'التحسين باستخدام الذكاء الاصطناعي'." : "Staff clicks 'Optimize with AI'."}</span>
+                    <span className="font-bold text-primary">2.</span>
+                    <span>{lang === "ar" ? "ينقر الموظف على 'التحسين باستخدام الذكاء الاصطناعي'." : "Staff clicks the 'AI Optimize' magic wand."}</span>
                   </li>
                   <li className="flex gap-2 items-start">
-                    <span className="font-bold text-emerald-600">3.</span>
-                    <span>{lang === "ar" ? "يقوم الذكاء الاصطناعي بتحليل تاريخ المريض في السجل الطبي ويقارنه بالمدخلات." : "AI analyzes the patient's EMR history and compares it with the inputs."}</span>
+                    <span className="font-bold text-primary">3.</span>
+                    <span>{lang === "ar" ? "يقوم الذكاء الاصطناعي بتحليل تاريخ المريض في السجل الطبي ويقارنه بالمدخلات." : "AI analyzes the EMR history and runs the 4 optimization dimensions."}</span>
                   </li>
                   <li className="flex gap-2 items-start">
-                    <span className="font-bold text-emerald-600">4.</span>
-                    <span>{lang === "ar" ? "يراجع الموظف مقترحات الذكاء الاصطناعي ويقبلها أو يرفضها قبل التأكيد." : "Staff reviews the AI's 'Diff' suggestions and accepts or rejects them before confirming."}</span>
+                    <span className="font-bold text-primary">4.</span>
+                    <span>{lang === "ar" ? "يراجع الموظف مقترحات الذكاء الاصطناعي ويقبلها أو يرفضها قبل التأكيد." : "Staff reviews the interactive Visual Diff and safely accepts/rejects the AI suggestions. Completed bookings are flagged with Gold AI Badges!"}</span>
                   </li>
                 </ul>
               </CardContent>
@@ -206,6 +206,170 @@ export default function AiExplanationPage() {
               {lang === "ar" 
                 ? "عندما يطلب النظام الموعد المحسن، يتحقق محرك قاعدة البيانات الخاص بنا تلقائياً من التعارضات. إذا كان الوقت المقترح محجوزاً مسبقاً لمريض آخر، فسيقوم النظام بإزاحة الموعد الجديد تلقائياً بمقدار 30 دقيقة (حتى 20 محاولة) للعثور على أقرب وقت متاح بالكامل، مما يضمن عدم وجود حجوزات مزدوجة على الإطلاق." 
                 : "When generating automated slots, our database engine strictly checks for overlaps. If a proposed 30-minute window is already taken by another manual or AI booking, the system will automatically shift the slot forward by 30 minutes (up to 20 attempts) to find the nearest completely free slot, ensuring double-bookings never occur."}
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Technical Architecture */}
+        <Card className="shadow-sm border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 mt-6">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Brain className="w-5 h-5 text-primary" />
+              {lang === "ar" ? "تحت الغطاء: معمارية الوكيل الذكي المتعدد (LangGraph)" : "Under the Hood: LangGraph Multi-Agent Architecture"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed space-y-4">
+            <p>
+              {lang === "ar" 
+                ? "يعمل وكيل الجدولة الذكي باستخدام سير عمل قائم على رسم بياني لحالة متقدمة (LangGraph)، مقسماً إلى عقدتين متميزتين:" 
+                : "The Scheduling AI Agent operates using an advanced state-based graph workflow (LangGraph), broken down into distinct nodes:"}
+            </p>
+            <ul className="space-y-3">
+              <li className="flex gap-2 items-start">
+                <span className="font-bold text-primary">1.</span>
+                <span>
+                  <strong>{lang === "ar" ? "عقدة جمع البيانات:" : "Data Gathering Node:"}</strong>{" "}
+                  {lang === "ar" ? "يجمع السياق الطبي الشامل (العلامات الحيوية، التاريخ الطبي، معلومات الطبيب) لتمريرها كحالة الوكيل (AgentState)." : "Aggregates comprehensive medical context (vitals, medical history, provider data) to pass along as the AgentState."}
+                </span>
+              </li>
+              <li className="flex gap-2 items-start">
+                <span className="font-bold text-primary">2.</span>
+                <span>
+                  <strong>{lang === "ar" ? "عقدة القرار (LLM):" : "Decision Node (LLM):"}</strong>{" "}
+                  {lang === "ar" ? "يستخدم نموذجاً لغوياً كبيراً (Llama-3.3-70b-versatile عبر ChatGroq) لتحليل الحالة، وموازنة عوامل الأولوية، وإخراج هيكل بيانات (JSON) دقيق للموعد الأمثل." : "Utilizes a Large Language Model (Llama-3.3-70b-versatile via ChatGroq) to analyze the state, weigh priority factors, and output a strictly-typed JSON structure for the optimal appointment."}
+                </span>
+              </li>
+            </ul>
+          </CardContent>
+        </Card>
+
+        {/* Diagnostic AI Detail Section */}
+        <div className="flex items-center gap-2 mb-6 mt-16 px-2">
+          <Stethoscope className="w-6 h-6 text-amber-600 dark:text-amber-500" />
+          <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+            {lang === "ar" ? "تفاصيل: كيف يعمل وكيل المساعدة التشخيصية" : "Deep Dive: How the Diagnostic Assistance AI Agent Works"}
+          </h2>
+        </div>
+
+        <div className="grid lg:grid-cols-3 gap-6">
+          {/* Diagnostic Operating Model */}
+          <div className="lg:col-span-1 space-y-6">
+            <Card className="shadow-sm border-slate-200 dark:border-slate-800 h-full">
+              <CardHeader>
+                <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-500 rounded-lg flex items-center justify-center mb-4">
+                  <Brain className="w-5 h-5" />
+                </div>
+                <CardTitle className="text-lg">
+                  {lang === "ar" ? "تحليل مبني على السجلات، قرار بيد الطبيب" : "EMR-Driven Analysis, Physician-Led Decision"}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-slate-600 dark:text-slate-400 space-y-4">
+                <p>
+                  {lang === "ar" 
+                    ? "يقوم الذكاء الاصطناعي بمعالجة البيانات، لكن الأطباء هم من يضعون التشخيص النهائي بناءً على خبرتهم." 
+                    : "The AI processes massive amounts of patient data, but the physician always makes the final diagnostic decision based on their clinical expertise."}
+                </p>
+                <ul className="space-y-3">
+                  <li className="flex gap-2 items-start">
+                    <span className="font-bold text-amber-600 dark:text-amber-500">1.</span>
+                    <span>{lang === "ar" ? "يقوم النظام بتجميع التاريخ الطبي للمريض بالكامل." : "System aggregates the patient's entire medical history, vitals, and notes."}</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <span className="font-bold text-amber-600 dark:text-amber-500">2.</span>
+                    <span>{lang === "ar" ? "يسترجع محرك البحث الإرشادات الطبية المرجعية المتطابقة." : "The RAG engine retrieves matching clinical guidelines from verified medical manuals."}</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <span className="font-bold text-amber-600 dark:text-amber-500">3.</span>
+                    <span>{lang === "ar" ? "يولد الذكاء الاصطناعي قائمة بالتشخيصات المحتملة مع نسب الثقة والتبرير السريري." : "The LLM AI generates candidate ICD-10-CM diagnoses with confidence scores and clinical reasoning."}</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <span className="font-bold text-amber-600 dark:text-amber-500">4.</span>
+                    <span>{lang === "ar" ? "يراجع الطبيب المقترحات والمصادر الموثقة، ثم يعتمد التشخيص الصحيح في السجل." : "Doctor reviews the proposals and verified sources, then safely confirms the correct diagnosis."}</span>
+                  </li>
+                </ul>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* 4 Pillars of Diagnostics */}
+          <div className="lg:col-span-2">
+            <Card className="shadow-sm border-slate-200 dark:border-slate-800 h-full">
+              <CardHeader>
+                <CardTitle className="text-lg">
+                  {lang === "ar" ? "مراحل المعالجة التشخيصية" : "The Diagnostic Processing Pipeline"}
+                </CardTitle>
+                <CardDescription>
+                  {lang === "ar" ? "كيف يقوم الذكاء الاصطناعي بتوليد وتقييم التشخيصات؟" : "How does the AI generate and score its candidate diagnoses?"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl border border-indigo-100 bg-indigo-50/50 dark:border-indigo-900/30 dark:bg-indigo-950/20">
+                    <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-400 font-semibold mb-2">
+                      <Activity className="w-4 h-4" />
+                      {lang === "ar" ? "1. تجميع بيانات السجل" : "1. EMR Data Aggregation"}
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      {lang === "ar" 
+                        ? "يجمع الملاحظات السريرية، الشكاوى الرئيسية، العلامات الحيوية، والمختبر في ملف سياقي واحد." 
+                        : "Compiles Doctor's Notes, Chief Complaints, Vitals, Lab Orders, and comprehensive surgical/medical/medication history into a single contextual profile."}
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-purple-100 bg-purple-50/50 dark:border-purple-900/30 dark:bg-purple-950/20">
+                    <div className="flex items-center gap-2 text-purple-700 dark:text-purple-400 font-semibold mb-2">
+                      <Sparkles className="w-4 h-4" />
+                      {lang === "ar" ? "2. البحث المدعم بالسياق (RAG)" : "2. Contextual RAG Retrieval"}
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      {lang === "ar" 
+                        ? "يستخدم محرك (BM25) للبحث في الأدلة السريرية، ويضمن توافق الاقتراحات مع البروتوكولات القياسية." 
+                        : "Uses a BM25 Search Engine to scan verified clinical manuals, grounding the AI's generation strictly within standard care protocols and evidence-based medicine."}
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-fuchsia-100 bg-fuchsia-50/50 dark:border-fuchsia-900/30 dark:bg-fuchsia-950/20">
+                    <div className="flex items-center gap-2 text-fuchsia-700 dark:text-fuchsia-400 font-semibold mb-2">
+                      <Brain className="w-4 h-4" />
+                      {lang === "ar" ? "3. التقييم العيادي للذكاء الاصطناعي" : "3. LLM Clinical Scoring"}
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      {lang === "ar" 
+                        ? "يحسب مستوى الثقة عبر تقييم 5 عوامل: توافق الأعراض، ومطابقة العلامات الحيوية، وتوافق RAG." 
+                        : "Calculates an overall confidence score by evaluating 5 strict metrics: Symptom-criteria match (30%), Lab/Vital alignment (25%), RAG Similarity (20%), Consistency, and Comorbidities."}
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/50 dark:border-blue-900/30 dark:bg-blue-950/20">
+                    <div className="flex items-center gap-2 text-blue-700 dark:text-blue-400 font-semibold mb-2">
+                      <ShieldCheck className="w-4 h-4" />
+                      {lang === "ar" ? "4. المصادر الطبية والسلامة" : "4. Safety & Verified Sources"}
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">
+                      {lang === "ar" 
+                        ? "كل تشخيص مرفق بمصدر طبي معتمد (مثل WHO, CDC) ورمز تشخيصي (ICD-10-CM)." 
+                        : "Prohibited from recommending treatments autonomously. Every generated suggestion MUST cite a verified medical source (WHO, CDC, UpToDate) and output precise ICD-10-CM codes."}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+
+        {/* Fallback AI Mode */}
+        <Card className="shadow-sm border-slate-200 dark:border-slate-800 bg-amber-50/50 dark:bg-amber-950/10 mt-6">
+          <CardHeader>
+            <CardTitle className="text-lg text-amber-800 dark:text-amber-500 flex items-center gap-2">
+              <Activity className="w-5 h-5" />
+              {lang === "ar" ? "آلية الطوارئ (الوضع الاحتياطي)" : "Deterministic Fallback Engine"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
+            <p>
+              {lang === "ar" 
+                ? "لضمان عمل العيادة دون انقطاع، إذا واجه الذكاء الاصطناعي الرئيسي عطلاً، يتحول النظام فوراً إلى 'محرك الطوارئ المحلي' الذي يستخدم خوارزميات الكلمات المفتاحية لتقديم تشخيصات أولية موثوقة محلياً." 
+                : "To ensure 100% uptime, if the primary LLM cloud engine experiences API latency or downtime, the system instantly hot-swaps to a local Deterministic Fallback Engine. This engine uses symptom-keyword overlap detection and algorithms to provide baseline, clinical-grade suggestions entirely locally without internet access."}
             </p>
           </CardContent>
         </Card>

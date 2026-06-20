@@ -1,13 +1,14 @@
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import CurrentUser
-from app.models import ActivityLog, Patient
-from app.schemas import PatientCreate, PatientDetail, PatientListItem
+from app.models import ActivityLog, Patient, PatientDiagnosis, Appointment
+from app.schemas import PatientCreate, PatientDetail, PatientListItem, DiagnosisCreate, DiagnosisOut
 from app.util import patient_full_name
 
 router = APIRouter(prefix="/patients", tags=["patients"])
@@ -172,3 +173,39 @@ def delete_patient(
     _log_activity(db, "Patient record deleted", patient_full_name(p), user.full_name)
     db.delete(p)
     db.commit()
+
+@router.post("/{patient_id}/diagnoses", response_model=DiagnosisOut)
+def create_diagnosis(patient_id: int, body: DiagnosisCreate, user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
+    p = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Patient not found")
+        
+    active_appt = db.query(Appointment).filter(
+        Appointment.patient_id == patient_id,
+        func.date(Appointment.appointment_time) == date.today(),
+        Appointment.status.in_(["Scheduled", "Waiting"])
+    ).first()
+    
+    if not active_appt:
+        raise HTTPException(status_code=400, detail="Patient must have an active appointment today (Scheduled or Waiting) to receive a diagnosis.")
+
+    d = PatientDiagnosis(
+        patient_id=patient_id,
+        icd_code=body.icd_code,
+        icd_title=body.icd_title,
+        notes=body.notes,
+        is_ai_generated=body.is_ai_generated,
+        status=body.status
+    )
+    db.add(d)
+    db.commit()
+    db.refresh(d)
+    action_text = "AI Diagnosis generated" if body.is_ai_generated else "Diagnosis added"
+    _log_activity(db, action_text, patient_full_name(p), f"{body.icd_code} · {active_appt.status}")
+    db.commit()
+    
+    # Also update appointment status to Completed
+    active_appt.status = "Completed"
+    db.commit()
+    
+    return d

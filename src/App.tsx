@@ -14,11 +14,12 @@ import PatientsListPage from "./pages/PatientsListPage";
 import PatientFormPage from "./pages/PatientFormPage";
 import PatientDetailsPage from "./pages/PatientDetailsPage";
 import PatientEMRPage from "./pages/PatientEMRPage";
+import PatientAIDiagnosisPage from "./pages/PatientAIDiagnosisPage";
 import VitalsRecordPage from "./pages/VitalsRecordPage";
 import AppointmentsPage from "./pages/AppointmentsPage";
 import MyProfilePage from "./pages/MyProfilePage";
 import AiExplanationPage from "./pages/AiExplanationPage";
-import StaffSchedulePage from "./pages/StaffSchedulePage";
+import AboutPage from "./pages/AboutPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
@@ -48,11 +49,13 @@ const App = () => (
               <Route path="/patients/:id/edit" element={<PatientFormPage />} />
               <Route path="/patients/emr" element={<PatientEMRPage />} />
               <Route path="/patients/emr/:id" element={<PatientEMRPage />} />
+              <Route path="/patients/emr/:id/diagnosis" element={<PatientAIDiagnosisPage />} />
+              <Route path="/patients/ai-diagnosis/:id" element={<PatientAIDiagnosisPage />} />
               <Route path="/vitals/record" element={<VitalsRecordPage />} />
               <Route path="/appointments" element={<AppointmentsPage />} />
               <Route path="/profile" element={<MyProfilePage />} />
-              <Route path="/schedule" element={<StaffSchedulePage />} />
               <Route path="/ai-agents-explained" element={<AiExplanationPage />} />
+              <Route path="/about" element={<AboutPage />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

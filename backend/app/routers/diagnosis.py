@@ -1,3 +1,5 @@
+from sqlalchemy import func
+from datetime import date
 from typing import Annotated, List
 import os
 import json

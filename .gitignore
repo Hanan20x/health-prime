@@ -24,3 +24,12 @@ backend/.env
 *.njsproj
 *.sln
 *.sw?
+
+__pycache__/
+*.pyc
+*.db
+fix_*.cjs
+fix_*.diff
+restore_*.py
+test_*.py
+update_*.py

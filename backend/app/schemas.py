@@ -444,6 +444,27 @@ class VitalsHistoryRow(APIModel):
     recorded_by: str
 
 
+class DiagnosisCreate(APIModel):
+    icd_code: str
+    icd_title: str
+    notes: str | None = None
+    is_ai_generated: bool = False
+    status: str = "Active"
+
+class DiagnosisUpdate(APIModel):
+    status: str
+
+class DiagnosisOut(APIModel):
+    id: int
+    patient_id: int
+    icd_code: str
+    icd_title: str
+    notes: str | None = None
+    is_ai_generated: bool
+    status: str
+    diagnosed_at: datetime
+
+
 # --- EMR ---
 class EmrSectionOut(APIModel):
     id: int
@@ -492,12 +513,13 @@ class EmrPageOut(APIModel):
     sections: list[EmrSectionOut]
     orders: list[ClinicalOrderOut]
     vitals_history: list[VitalsHistoryRow]
+    diagnoses: list[DiagnosisOut]
 
 
 # --- Dashboard ---
 class StatBlock(APIModel):
     title: str
-    value: int
+    value: str
     description: str
 
 
@@ -528,6 +550,8 @@ class AppointmentCreate(APIModel):
     ai_explanation: str | None = None
     manual_slots_affected: str | None = None
     optimization_diffs: str | None = None
+    status: str | None = None
+
 
 
 class AppointmentOut(APIModel):
@@ -598,4 +622,8 @@ class AIAgentResponse(APIModel):
     provider_action: str | None = None
     flags: list[AIAgentFlag] = Field(default_factory=list)
     nurse_summary: str | None = None
+
+
+class AppointmentStatusUpdate(APIModel):
+    status: str
 

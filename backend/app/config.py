@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
     cors_origins: str = "http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173"
+    who_icd_client_id: str = ""
+    who_icd_client_secret: str = ""
 
 
 settings = Settings()

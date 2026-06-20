@@ -78,7 +78,7 @@ export interface ProviderDetail {
 }
 
 export interface DashboardSummary {
-  stats: { title: string; value: number; description: string }[];
+  stats: { title: string; value: string | number; description: string }[];
   activity: { id: number; action: string; patient: string; provider: string; time: string }[];
 }
 
@@ -131,6 +131,17 @@ export interface VitalsHistoryRow {
   recordedBy: string;
 }
 
+export interface Diagnosis {
+  id: number;
+  patientId: number;
+  icdCode: string;
+  icdTitle: string;
+  notes?: string | null;
+  isAiGenerated: boolean;
+  status: string;
+  diagnosedAt: string;
+}
+
 export interface EmrPage {
   patient: {
     name: string;
@@ -148,4 +159,5 @@ export interface EmrPage {
   sections: { id: string; title: string; content: string }[];
   orders: { id: number; type: string; description: string; status: string; date: string }[];
   vitalsHistory: VitalsHistoryRow[];
+  diagnoses: Diagnosis[];
 }

@@ -19,6 +19,7 @@ interface DataTableProps<T> {
   data: T[];
   emptyMessage?: string;
   rowClassName?: (row: T) => string;
+  onRowClick?: (row: T) => void;
 }
 
 export function DataTable<T extends { id?: string | number }>({
@@ -26,16 +27,17 @@ export function DataTable<T extends { id?: string | number }>({
   data,
   emptyMessage = "No data found",
   rowClassName,
+  onRowClick,
 }: DataTableProps<T>) {
   if (data.length === 0) {
     return <EmptyState title={emptyMessage} description="Try adjusting your search or filters." />;
   }
 
   return (
-    <div className="bg-card rounded-lg border border-border overflow-hidden">
+    <div className="rounded-lg overflow-hidden">
       <Table>
         <TableHeader>
-          <TableRow className="bg-slate-50">
+          <TableRow className="bg-slate-50/80 text-xs font-semibold uppercase tracking-wider text-slate-500">
             {columns.map((col, i) => (
               <TableHead key={i} className={col.className}>
                 {col.header}
@@ -45,7 +47,11 @@ export function DataTable<T extends { id?: string | number }>({
         </TableHeader>
         <TableBody>
           {data.map((row, rowIndex) => (
-            <TableRow key={row.id ?? rowIndex} className={rowClassName ? rowClassName(row) : undefined}>
+            <TableRow 
+              key={row.id ?? rowIndex} 
+              className={`group transition-colors hover:bg-slate-50/50 ${rowClassName ? rowClassName(row) : ''}`}
+              onClick={() => onRowClick?.(row)}
+            >
               {columns.map((col, colIndex) => (
                 <TableCell key={colIndex} className={col.className}>
                   {typeof col.accessor === "function"

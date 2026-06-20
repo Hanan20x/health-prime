@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import CurrentUser
-from app.models import ClinicalOrder, EmrSection, Patient, Provider, VitalSign
-from app.schemas import ClinicalOrderOut, EmrPageOut, EmrPatientBanner, EmrSectionOut, EmrVitalsSnapshot, VitalsHistoryRow, EmrSectionUpdate
+from app.models import ClinicalOrder, EmrSection, EmrSectionHistory, Patient, Provider, VitalSign, PatientDiagnosis
+from app.schemas import ClinicalOrderOut, EmrPageOut, EmrPatientBanner, EmrSectionOut, EmrVitalsSnapshot, VitalsHistoryRow, EmrSectionUpdate, DiagnosisOut
 from app.util import calc_age, patient_full_name
 
 router = APIRouter(tags=["emr"])
@@ -108,7 +108,22 @@ def get_emr(patient_id: int, _user: CurrentUser, db: Annotated[Session, Depends(
             )
         )
     
-    return EmrPageOut(patient=banner, sections=section_out, orders=order_out, vitals_history=hist)
+    # Diagnoses
+    diagnoses_records = db.query(PatientDiagnosis).filter(PatientDiagnosis.patient_id == patient_id).order_by(PatientDiagnosis.id.desc()).all()
+    diagnoses_out = [
+        DiagnosisOut(
+            id=d.id,
+            patient_id=d.patient_id,
+            icd_code=d.icd_code,
+            icd_title=d.icd_title,
+            notes=d.notes,
+            is_ai_generated=d.is_ai_generated,
+            status=d.status,
+            diagnosed_at=d.diagnosed_at
+        ) for d in diagnoses_records
+    ]
+    
+    return EmrPageOut(patient=banner, sections=section_out, orders=order_out, vitals_history=hist, diagnoses=diagnoses_out)
 
 @router.post("/patients/{patient_id}/emr/{section_key:path}", response_model=EmrSectionOut)
 def add_emr_entry(
@@ -138,6 +153,15 @@ def add_emr_entry(
     if section_key == "PATIENT_IMAGE":
         section = db.query(EmrSection).filter(EmrSection.patient_id == patient_id, EmrSection.section_key == "PATIENT_IMAGE").first()
         if section:
+            # Save history before overwriting
+            if section.content:
+                db.add(EmrSectionHistory(
+                    emr_section_id=section.id,
+                    patient_id=patient_id,
+                    section_key=section.section_key,
+                    old_content=section.content,
+                    edited_by=_user.full_name
+                ))
             section.content = update.content
             db.commit()
             db.refresh(section)

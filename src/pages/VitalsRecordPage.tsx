@@ -44,9 +44,10 @@ export default function VitalsRecordPage() {
   const { lang, isArabic } = useLang();
   const [searchParams, setSearchParams] = useSearchParams();
   const patientIdParam = searchParams.get("patientId");
+  const viewParam = searchParams.get("view") as "entry" | "table" | "trends" | null;
   const patientId = patientIdParam ? Number(patientIdParam) : 0;
 
-  const [activeView, setActiveView] = useState<"entry" | "table" | "trends">("entry");
+  const [activeView, setActiveView] = useState<"entry" | "table" | "trends">(viewParam || "entry");
   const [activePanel, setActivePanel] = useState("general");
   
   // States
@@ -100,14 +101,14 @@ export default function VitalsRecordPage() {
     const w = parseFloat(weight);
     const h = parseFloat(height) / 100;
     if (w && h) return (w / (h * h)).toFixed(1);
-    return "0.0";
+    return "—";
   }, [weight, height]);
 
   const map = useMemo(() => {
     const s = parseFloat(sys);
     const d = parseFloat(dia);
     if (s && d) return ((s + 2 * d) / 3).toFixed(1);
-    return "0.0";
+    return "—";
   }, [sys, dia]);
 
   useEffect(() => {
@@ -134,12 +135,34 @@ export default function VitalsRecordPage() {
       };
       return apiFetch("/vitals", { method: "POST", body: JSON.stringify(body) });
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       qc.invalidateQueries({ queryKey: ["vitals-context", patientId] });
       qc.invalidateQueries({ queryKey: ["vitals-history", patientId] });
-      toast.success(tx("savedVitals", lang));
-      if (activePanel === "general") {
-          setTemp(""); setHr(""); setRr(""); setSpo2(""); setSys(""); setDia(""); setWeight(""); setHeight(""); setComplaints("");
+      toast.success(tx("savedSuccess", lang));
+      setTemp("");
+      setHr("");
+      setRr("");
+      setSpo2("");
+      setSys("");
+      setDia("");
+      setWeight("");
+      setHeight("");
+      setComplaints("");
+      
+      // Auto-transition appointment to Waiting
+      try {
+         const appts = await apiFetch<any[]>("/appointments");
+         const today = new Date().toISOString().split('T')[0];
+         const todaysAppt = appts.find(a => 
+            a.patientId === patientId && 
+            (!a.status || a.status === "Scheduled") && 
+            a.appointmentDate.startsWith(today)
+         );
+         if (todaysAppt) {
+            await apiFetch(`/appointments/${todaysAppt.id}/status`, { method: "PATCH", body: JSON.stringify({ status: "Waiting" }) });
+         }
+      } catch (e) {
+         console.error("Failed to transition appointment to waiting", e);
       }
     },
     onError: (e: Error) => toast.error(lang === "ar" ? "فشل الحفظ" : "Failed to save", { description: e.message }),
@@ -776,7 +799,7 @@ function VitalsInput({ label, value, onChange, unit, placeholder, last, lang }: 
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
-          className="w-full bg-slate-50/50 border border-slate-100 py-3 text-lg font-bold text-slate-700 outline-none focus:border-primary focus:bg-white rounded-xl px-4 transition-all"
+          className="w-full bg-slate-50/50 border border-slate-100 py-3 text-lg font-bold text-slate-700 outline-none focus:border-primary focus:bg-white rounded-xl px-4 transition-all placeholder:text-slate-300 placeholder:font-medium"
         />
         <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-300">{unit}</span>
       </div>

@@ -1,14 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { DataTable, type Column } from "@/components/shared/DataTable";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { CalendarPlus, Sparkles, Pencil, Trash2 } from "lucide-react";
+import { CalendarPlus, Sparkles, Pencil, Trash2, Eye, Calendar as CalendarIcon, Clock, Users, AlertCircle, CalendarDays } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import { useLang } from "@/hooks/useLang";
 import { tx } from "@/lib/i18n";
+import { useAuth } from "@/hooks/useAuth";
+import { StatCard } from "@/components/shared/StatCard";
 
 import {
   Dialog,
@@ -18,6 +21,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,6 +41,7 @@ import { Calendar, dateFnsLocalizer } from "react-big-calendar";
 import { format, parse, startOfWeek, getDay } from "date-fns";
 import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
+import "./appointments-calendar.css";
 
 const locales = {
   "en-US": enUS,
@@ -78,12 +92,29 @@ interface OptimizationReview {
 export default function AppointmentsPage() {
   const qc = useQueryClient();
   const { lang } = useLang();
+  const { canBookAppointments } = useAuth();
+  const location = useLocation();
   
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  
+  useEffect(() => {
+    if (location.state?.openBooking) {
+      setIsDialogOpen(true);
+      // Clear history state to avoid triggering it again on reload/navigation
+      window.history.replaceState({}, document.title);
+    }
+  }, [location]);
   const [selectedAppointment, setSelectedAppointment] = useState<AppointmentRow | null>(null);
   const [optimizeAppointmentId, setOptimizeAppointmentId] = useState<number | null>(null);
   const [lastOptimizedId, setLastOptimizedId] = useState<number | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [deleteAppointmentId, setDeleteAppointmentId] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<"overview" | "list" | "calendar">("overview");
+  const [calendarView, setCalendarView] = useState<"month" | "week" | "day" | "agenda">("month");
+  
+  // Schedule Filter State
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterPriority, setFilterPriority] = useState("all");
+  const [filterBookingType, setFilterBookingType] = useState("all");
 
   // Form State
   const [patientId, setPatientId] = useState("");
@@ -155,6 +186,19 @@ export default function AppointmentsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["appointments"] });
       toast.success(lang === "ar" ? "تم حذف الموعد" : "Appointment deleted successfully");
+    },
+    onError: () => toast.error(tx("error", lang)),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) =>
+      apiFetch(`/appointments/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["appointments"] });
+      toast.success(lang === "ar" ? "تم تحديث الحالة" : "Status updated");
     },
     onError: () => toast.error(tx("error", lang)),
   });
@@ -291,30 +335,281 @@ export default function AppointmentsPage() {
   };
 
   const columns: Column<AppointmentRow>[] = [
-    { header: tx("dateTime", lang), accessor: (row) => format(new Date(row.appointmentDate), "PP p") },
-    { header: tx("patient", lang), accessor: "patientName" },
-    { header: tx("provider", lang), accessor: (row) => row.providerName || "Any" },
-    { header: "Priority", accessor: (row) => {
-      const prio = row.priorityLevel || "Routine";
-      let colorClass = "bg-sky-50 text-sky-700 border-sky-200";
-      if (prio === "Urgent") colorClass = "bg-rose-50 text-rose-700 border-rose-200";
-      else if (prio === "Soon" || prio === "High") colorClass = "bg-amber-50 text-amber-700 border-amber-200";
-      return <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${colorClass}`}>{prio}</span>;
-    }},
-    { header: tx("status", lang), accessor: (row) => (
-      <div className="flex items-center gap-2">
-        <StatusBadge variant={row.status === "Scheduled" ? "active" : "inactive"}>{row.status}</StatusBadge>
-        {row.isAiGenerated && <div className="flex items-center gap-1 text-xs text-emerald-600 font-medium" title="Optimized by AI"><Sparkles className="w-3.5 h-3.5" /> AI</div>}
-      </div>
-    )},
+    { 
+      header: tx("dateTime", lang) || "Date & Time", 
+      className: "text-center",
+      accessor: (row) => (
+        <div className="flex flex-col items-center text-center">
+          <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+            {format(new Date(row.appointmentDate), "p")}
+          </span>
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            {format(new Date(row.appointmentDate), "MMM d, yyyy")}
+          </span>
+        </div>
+      ) 
+    },
+    { 
+      header: tx("patient", lang), 
+      className: "text-center",
+      accessor: (row) => (
+        <div className="flex flex-col items-center text-center">
+          <span className="font-semibold text-slate-800 dark:text-slate-100">{row.patientName}</span>
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            ID: #{row.patientId}
+          </span>
+        </div>
+      )
+    },
+    { 
+      header: lang === "ar" ? "مزود الرعاية الصحية" : "Healthcare Provider", 
+      className: "text-center",
+      accessor: (row) => (
+        <div className="flex flex-col items-center text-center">
+          <span className="font-semibold text-slate-800 dark:text-slate-100">{row.providerName || "Unassigned"}</span>
+          {row.department && (
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {row.department}
+            </span>
+          )}
+        </div>
+      )
+    },
+    { 
+      header: "Priority", 
+      className: "text-center",
+      accessor: (row) => {
+        const prio = row.priorityLevel || "Routine";
+        let colorClass = "bg-emerald-100 text-emerald-800 ring-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300";
+        let dotClass = "bg-emerald-500";
+        if (prio === "Urgent") {
+          colorClass = "bg-rose-100 text-rose-800 ring-rose-500/30 dark:bg-rose-500/20 dark:text-rose-300";
+          dotClass = "bg-rose-500";
+        } else if (prio === "Soon" || prio === "High") {
+          colorClass = "bg-amber-100 text-amber-800 ring-amber-500/30 dark:bg-amber-500/20 dark:text-amber-300";
+          dotClass = "bg-amber-500";
+        }
+        return (
+          <div className="flex justify-center">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold ring-1 ring-inset ${colorClass}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${dotClass} shadow-sm`} />
+              {prio.toUpperCase()}
+            </span>
+          </div>
+        );
+      }
+    },
+    { 
+      header: tx("source", lang) || "Source", 
+      className: "text-center",
+      accessor: (row) => (
+        <div className="flex justify-center items-center">
+          {row.isAiGenerated ? (
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold" title="Optimized by AI">
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+              <span className="bg-gradient-to-r from-amber-600 to-amber-500 bg-clip-text text-transparent">AI Optimized</span>
+            </span>
+          ) : (
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              Manual Booking
+            </span>
+          )}
+        </div>
+      )
+    },
+    { 
+      header: tx("status", lang) || "Status", 
+      className: "text-center",
+      accessor: (row) => {
+        const status = row.status || "Scheduled";
+        let colorClass = "bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800/50";
+        if (status === "Completed") {
+          colorClass = "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-800/50";
+        } else if (status === "Waiting") {
+          colorClass = "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700/50";
+        } else if (status === "Cancelled" || status === "No Show") {
+          colorClass = "bg-rose-50 text-rose-700 border-rose-100 dark:bg-rose-900/20 dark:text-rose-400 dark:border-rose-800/50";
+        }
+        return (
+          <div className="flex justify-center">
+            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border ${colorClass}`}>
+              {status}
+            </span>
+          </div>
+        );
+      }
+    },
     {
       header: tx("actions", lang) || "Actions",
+      className: "text-center",
       accessor: (row) => (
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-          <Button variant="outline" size="sm" onClick={() => handleRowClick(row)}>
-            {tx("view", lang) || "View"}
+        <div className="flex justify-center items-center gap-1 transition-opacity duration-200" onClick={(e) => e.stopPropagation()}>
+          {(row.status === "Scheduled" || !row.status) && canBookAppointments && (
+            <Button variant="outline" size="sm" className="h-7 text-xs border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-900/30" onClick={() => statusMutation.mutate({ id: row.id, status: "Waiting" })}>
+              Set Waiting
+            </Button>
+          )}
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => handleRowClick(row)}>
+            <Eye className="w-3.5 h-3.5" />
           </Button>
-          <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-100" onClick={() => {
+          {canBookAppointments && (
+            <>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => {
+                setPatientId(row.patientId.toString());
+                setReason(row.reason);
+                if (row.providerId) setProviderId(row.providerId.toString());
+                if (row.department) setDepartment(row.department);
+                if (row.visitType) setVisitType(row.visitType);
+                setPriorityLevel(row.priorityLevel || "Routine");
+                const dt = new Date(row.appointmentDate);
+                setDateStr(dt.toLocaleDateString("en-CA"));
+                setTimeStr(dt.toTimeString().slice(0, 5));
+                setOptimizeAppointmentId(row.id);
+                setIsDialogOpen(true);
+              }}>
+                <Pencil className="w-3.5 h-3.5" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50" onClick={() => {
+                setDeleteAppointmentId(row.id);
+              }}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+              {!row.isAiGenerated && (
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-indigo-400 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/30" onClick={() => {
+                  setPatientId(row.patientId.toString());
+                  setReason(row.reason);
+                  if (row.providerId) setProviderId(row.providerId.toString());
+                  if (row.department) setDepartment(row.department);
+                  if (row.visitType) setVisitType(row.visitType);
+                  setPriorityLevel(row.priorityLevel || "Routine");
+                  const dt = new Date(row.appointmentDate);
+                  setDateStr(dt.toLocaleDateString("en-CA"));
+                  setTimeStr(dt.toTimeString().slice(0, 5));
+                  setOptimizeAppointmentId(row.id);
+                  setIsDialogOpen(true);
+                }}>
+                  <Sparkles className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      )
+    }
+  ];
+
+  const overviewColumns: Column<AppointmentRow>[] = [
+    {
+      header: lang === "ar" ? "المريض" : "PATIENT",
+      accessor: (row) => {
+        const patientObj = patients.find(p => p.id === row.patientId);
+        const nationalId = patientObj?.nationalId || `ID: #${row.patientId}`;
+        const initials = row.patientName
+          ? row.patientName
+              .split(" ")
+              .map((n) => n[0])
+              .join("")
+              .slice(0, 2)
+              .toUpperCase()
+          : "P";
+        return (
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-sm">
+              {initials}
+            </div>
+            <div className="flex flex-col text-left">
+              <span className="font-bold text-slate-800 dark:text-slate-100 hover:text-primary transition-colors cursor-pointer">
+                {row.patientName}
+              </span>
+              <span className="text-[11px] text-slate-400 font-mono">
+                {nationalId}
+              </span>
+            </div>
+          </div>
+        );
+      }
+    },
+    {
+      header: lang === "ar" ? "الخدمة" : "SERVICE",
+      accessor: (row) => (
+        <div className="flex flex-col text-left">
+          <span className="font-semibold text-slate-700 dark:text-slate-200 text-sm">
+            {row.reason}
+          </span>
+          <span className="text-[11px] text-slate-400 font-medium">
+            {row.visitType || "General Consultation"} · 30 min
+          </span>
+        </div>
+      )
+    },
+    {
+      header: lang === "ar" ? "التاريخ والوقت" : "DATE & TIME",
+      accessor: (row) => {
+        const start = new Date(row.appointmentDate);
+        const end = new Date(start.getTime() + 30 * 60000);
+        return (
+          <div className="flex flex-col text-left">
+            <span className="font-bold text-slate-800 dark:text-slate-100 text-sm">
+              {format(start, "MMM d, yyyy")}
+            </span>
+            <span className="text-[11px] text-slate-400 font-medium">
+              {format(start, "p")} - {format(end, "p")}
+            </span>
+          </div>
+        );
+      }
+    },
+    {
+      header: lang === "ar" ? "المصدر" : "SOURCE",
+      accessor: (row) => (
+        <div className="flex justify-start">
+          {row.isAiGenerated ? (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-100 dark:bg-emerald-950/20 dark:text-emerald-400 dark:border-emerald-900/50">
+              <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+              AI Widget
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-100 dark:bg-slate-800/30 dark:text-slate-400 dark:border-slate-700">
+              Manual Slot
+            </span>
+          )}
+        </div>
+      )
+    },
+    {
+      header: lang === "ar" ? "الحالة" : "STATUS",
+      accessor: (row) => {
+        const status = row.status || "Scheduled";
+        let colorClass = "bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800/50";
+        if (status === "Completed") {
+          colorClass = "bg-emerald-50 text-emerald-700 border-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-800/50";
+        } else if (status === "Waiting") {
+          colorClass = "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700/50";
+        } else if (status === "Cancelled" || status === "No Show") {
+          colorClass = "bg-rose-50 text-rose-700 border-rose-100 dark:bg-rose-900/20 dark:text-rose-400 dark:border-rose-800/50";
+        }
+        return (
+          <div className="flex justify-start">
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${colorClass}`}>
+              {status}
+            </span>
+          </div>
+        );
+      }
+    },
+    {
+      header: lang === "ar" ? "الإجراءات" : "ACTIONS",
+      accessor: (row) => (
+        <div className="flex items-center gap-1 justify-start" onClick={(e) => e.stopPropagation()}>
+          {(row.status === "Scheduled" || !row.status) && canBookAppointments && (
+            <Button variant="outline" size="sm" className="h-7 text-[10px] border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-900/30" onClick={() => statusMutation.mutate({ id: row.id, status: "Waiting" })}>
+              Wait
+            </Button>
+          )}
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => handleRowClick(row)}>
+            <Eye className="w-3.5 h-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => {
             setPatientId(row.patientId.toString());
             setReason(row.reason);
             if (row.providerId) setProviderId(row.providerId.toString());
@@ -329,34 +624,72 @@ export default function AppointmentsPage() {
           }}>
             <Pencil className="w-3.5 h-3.5" />
           </Button>
-          <Button variant="outline" size="icon" className="h-8 w-8 text-rose-500 hover:text-rose-700 hover:bg-rose-50" onClick={() => {
-            if(confirm(lang === "ar" ? "هل أنت متأكد من حذف هذا الموعد؟" : "Are you sure you want to delete this appointment?")) {
-              deleteMutation.mutate(row.id);
-            }
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50" onClick={() => {
+            setDeleteAppointmentId(row.id);
           }}>
             <Trash2 className="w-3.5 h-3.5" />
           </Button>
-          {!row.isAiGenerated && (
-            <Button variant="outline" size="sm" className="gap-1.5 text-indigo-600 border-indigo-200 hover:bg-indigo-50" onClick={() => {
-              setPatientId(row.patientId.toString());
-              setReason(row.reason);
-              if (row.providerId) setProviderId(row.providerId.toString());
-              if (row.department) setDepartment(row.department);
-              if (row.visitType) setVisitType(row.visitType);
-              setPriorityLevel(row.priorityLevel || "Routine");
-              const dt = new Date(row.appointmentDate);
-              setDateStr(dt.toLocaleDateString("en-CA"));
-              setTimeStr(dt.toTimeString().slice(0, 5));
-              setOptimizeAppointmentId(row.id);
-              setIsDialogOpen(true);
-            }}>
-              <Sparkles className="w-3 h-3" /> Optimize With AI
-            </Button>
-          )}
         </div>
       )
     }
   ];
+
+  // Stats & Filters Calculations for the Overview front page
+  const todayStr = new Date().toLocaleDateString(lang === "ar" ? "ar-SA" : "en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  const upcomingBookedCount = appointments.filter(appt => {
+    const date = new Date(appt.appointmentDate);
+    return date.getTime() > Date.now() && appt.status !== "Cancelled";
+  }).length;
+
+  const distinctPatientsCount = new Set(appointments.map(appt => appt.patientId)).size;
+
+  const cancellationsCount = appointments.filter(appt => appt.status === "Cancelled").length;
+
+  const isToday = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const today = new Date();
+    return date.getDate() === today.getDate() &&
+      date.getMonth() === today.getMonth() &&
+      date.getFullYear() === today.getFullYear();
+  };
+
+  const isAfterToday = (dateStr: string) => {
+    const date = new Date(dateStr);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    return date.getTime() > todayEnd.getTime();
+  };
+
+  const filteredAppointments = appointments.filter(appt => {
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      const patientMatch = appt.patientName?.toLowerCase().includes(term);
+      const providerMatch = appt.providerName?.toLowerCase().includes(term);
+      const reasonMatch = appt.reason?.toLowerCase().includes(term);
+      const deptMatch = appt.department?.toLowerCase().includes(term);
+      if (!patientMatch && !providerMatch && !reasonMatch && !deptMatch) return false;
+    }
+    if (filterPriority !== "all") {
+      const priority = appt.priorityLevel || "Routine";
+      if (priority.toLowerCase() !== filterPriority.toLowerCase()) return false;
+    }
+    if (filterBookingType !== "all") {
+      if (filterBookingType === "ai" && !appt.isAiGenerated) return false;
+      if (filterBookingType === "manual" && appt.isAiGenerated) return false;
+    }
+    return true;
+  });
+
+  const todayAppointments = filteredAppointments.filter(appt => isToday(appt.appointmentDate));
+  const upcomingAppointments = filteredAppointments
+    .filter(appt => isAfterToday(appt.appointmentDate))
+    .sort((a, b) => new Date(a.appointmentDate).getTime() - new Date(b.appointmentDate).getTime());
 
   return (
     <DashboardLayout>
@@ -365,27 +698,37 @@ export default function AppointmentsPage() {
         description={tx("manageAppointmentsDesc", lang)}
         actions={
           <div className="flex gap-2 items-center">
-            <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
+            <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 dark:bg-slate-800 dark:border-slate-700">
               <Button 
-                variant={viewMode === "list" ? "secondary" : "ghost"} 
+                variant={viewMode === "overview" ? "default" : "ghost"} 
+                size="sm"
+                onClick={() => setViewMode("overview")}
+                className={`text-sm ${viewMode === "overview" ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90" : "text-slate-500 hover:text-slate-700 dark:text-slate-400"}`}
+              >
+                {lang === "ar" ? "نظرة عامة" : "Overview"}
+              </Button>
+              <Button 
+                variant={viewMode === "list" ? "default" : "ghost"} 
                 size="sm"
                 onClick={() => setViewMode("list")}
-                className={`text-sm ${viewMode === "list" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                className={`text-sm ${viewMode === "list" ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90" : "text-slate-500 hover:text-slate-700 dark:text-slate-400"}`}
               >
-                List
+                {lang === "ar" ? "القائمة" : "List"}
               </Button>
               <Button 
-                variant={viewMode === "calendar" ? "secondary" : "ghost"} 
+                variant={viewMode === "calendar" ? "default" : "ghost"} 
                 size="sm"
                 onClick={() => setViewMode("calendar")}
-                className={`text-sm ${viewMode === "calendar" ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+                className={`text-sm ${viewMode === "calendar" ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90" : "text-slate-500 hover:text-slate-700 dark:text-slate-400"}`}
               >
-                Calendar
+                {lang === "ar" ? "التقويم" : "Calendar"}
               </Button>
             </div>
-            <Button onClick={() => setIsDialogOpen(true)} className="gap-2 bg-indigo-600 hover:bg-indigo-700">
-              <CalendarPlus className="w-4 h-4" /> {tx("bookAppointment", lang)}
-            </Button>
+            {canBookAppointments && (
+              <Button onClick={() => setIsDialogOpen(true)} className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm">
+                <CalendarPlus className="w-4 h-4" /> {tx("bookAppointment", lang)}
+              </Button>
+            )}
           </div>
         }
       />
@@ -397,42 +740,328 @@ export default function AppointmentsPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {viewMode === "list" ? (
+          {viewMode === "overview" && (
+            <div className="space-y-6">
+              {/* StatCards Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatCard
+                  title={lang === "ar" ? "تاريخ اليوم" : "Today's Date"}
+                  value={todayStr}
+                  icon={CalendarIcon}
+                  description={lang === "ar" ? "التاريخ الحالي" : "Current date"}
+                />
+                <StatCard
+                  title={lang === "ar" ? "المواعيد القادمة المؤكدة" : "Upcoming Booked & Confirmed"}
+                  value={upcomingBookedCount}
+                  icon={Clock}
+                  description={lang === "ar" ? "الحجوزات القادمة غير الملغاة" : "Scheduled future slots"}
+                />
+                <StatCard
+                  title={lang === "ar" ? "عدد المرضى" : "Patients"}
+                  value={distinctPatientsCount}
+                  icon={Users}
+                  description={lang === "ar" ? "المرضى المسجلين في المواعيد" : "Distinct patients scheduled"}
+                />
+                <StatCard
+                  title={lang === "ar" ? "الملغاة" : "Cancellation"}
+                  value={cancellationsCount}
+                  icon={AlertCircle}
+                  description={lang === "ar" ? "المواعيد الملغاة" : "Cancelled appointments"}
+                />
+              </div>
+
+              {/* Filters Bar */}
+              <div className="flex flex-wrap items-center gap-3 bg-card border border-border/50 p-4 rounded-xl shadow-sm ring-1 ring-border/5">
+                <div className="flex-1 min-w-[200px]">
+                  <Input
+                    placeholder={lang === "ar" ? "البحث عن طريق اسم المريض أو الطبيب..." : "Search by patient, provider or department..."}
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="h-9 text-sm bg-white dark:bg-slate-950"
+                  />
+                </div>
+                <div className="w-[160px]">
+                  <Select value={filterPriority} onValueChange={setFilterPriority}>
+                    <SelectTrigger className="h-9 text-sm bg-white dark:bg-slate-950">
+                      <SelectValue placeholder="Priority" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">{lang === "ar" ? "كل الأولويات" : "All Priorities"}</SelectItem>
+                      <SelectItem value="urgent">{lang === "ar" ? "عاجل" : "Urgent"}</SelectItem>
+                      <SelectItem value="soon">{lang === "ar" ? "قريباً" : "Soon"}</SelectItem>
+                      <SelectItem value="routine">{lang === "ar" ? "روتيني" : "Routine"}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="w-[160px]">
+                  <Select value={filterBookingType} onValueChange={setFilterBookingType}>
+                    <SelectTrigger className="h-9 text-sm bg-white dark:bg-slate-950">
+                      <SelectValue placeholder="Booking Type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">{lang === "ar" ? "كل أنواع الحجز" : "All Bookings"}</SelectItem>
+                      <SelectItem value="ai">{lang === "ar" ? "محسن بالذكاء الاصطناعي" : "AI Optimized"}</SelectItem>
+                      <SelectItem value="manual">{lang === "ar" ? "حجز يدوي" : "Manual Booking"}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {(searchTerm || filterPriority !== "all" || filterBookingType !== "all") && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setSearchTerm("");
+                      setFilterPriority("all");
+                      setFilterBookingType("all");
+                    }}
+                    className="h-9 px-3 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50"
+                  >
+                    {lang === "ar" ? "إعادة ضبط" : "Clear Filters"}
+                  </Button>
+                )}
+              </div>
+
+              {/* Schedules Layout Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Today's Schedule (2/3 width) */}
+                <div className="lg:col-span-2 space-y-6 bg-card border border-border/50 p-6 rounded-xl shadow-sm ring-1 ring-border/5">
+                  <div className="flex justify-between items-center pb-4 border-b border-border/40">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0">
+                        <CalendarDays className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                      <div className="flex flex-col">
+                        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-none mb-1">
+                          {lang === "ar" ? "جدول اليوم" : "Today's Schedule"}
+                        </h3>
+                        <p className="text-xs text-slate-400">
+                          {new Date().toLocaleDateString(lang === "ar" ? "ar-SA" : "en-US", { weekday: "long", month: "short", day: "numeric" })}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-xs bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 px-3 py-1 rounded-full font-bold">
+                      {todayAppointments.length} {todayAppointments.length === 1 ? (lang === "ar" ? "موعد" : "appointment") : (lang === "ar" ? "مواعيد" : "appointments")}
+                    </span>
+                  </div>
+                  
+                  <DataTable
+                    columns={overviewColumns}
+                    data={todayAppointments}
+                    emptyMessage={lang === "ar" ? "لا توجد مواعيد اليوم" : "No appointments scheduled for today"}
+                    rowClassName={(row) => {
+                      if (row.id === lastOptimizedId) return "bg-indigo-50 dark:bg-indigo-900/50 border-l-4 border-indigo-500 cursor-pointer transition-colors duration-700";
+                      return row.isAiGenerated ? "bg-[#f5fdf5]/50 hover:bg-[#eaf8ea]/50 dark:bg-[#f5fdf5]/5 cursor-pointer" : "cursor-pointer hover:bg-slate-50/50 dark:hover:bg-slate-800/50";
+                    }}
+                    onRowClick={handleRowClick}
+                  />
+                </div>
+
+                {/* Upcoming Schedule (1/3 width list style) */}
+                <div className="lg:col-span-1 space-y-6 bg-card border border-border/50 p-6 rounded-xl shadow-sm ring-1 ring-border/5">
+                  <div className="flex justify-between items-center pb-4 border-b border-border/40">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center shrink-0">
+                        <Clock className="w-5 h-5 text-sky-600 dark:text-sky-400" />
+                      </div>
+                      <div className="flex flex-col">
+                        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-none">
+                          {lang === "ar" ? "قريباً" : "Upcoming"}
+                        </h3>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setViewMode("list")}
+                      className="text-xs font-semibold text-primary hover:underline flex items-center gap-1 bg-transparent border-0 cursor-pointer"
+                    >
+                      {lang === "ar" ? "عرض الكل" : "See all"} →
+                    </button>
+                  </div>
+
+                  <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                    {upcomingAppointments.length === 0 ? (
+                      <div className="text-center py-8 text-slate-400 text-sm">
+                        {lang === "ar" ? "لا توجد مواعيد قادمة" : "No upcoming appointments"}
+                      </div>
+                    ) : (
+                      upcomingAppointments.map((appt) => {
+                        const start = new Date(appt.appointmentDate);
+                        return (
+                          <div
+                            key={appt.id}
+                            onClick={() => handleRowClick(appt)}
+                            className="flex items-start gap-3 p-3 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors border border-transparent hover:border-slate-100 dark:hover:border-slate-800"
+                          >
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 mt-1.5" />
+                            <div className="flex flex-col text-left min-w-0">
+                              <span className="font-bold text-slate-800 dark:text-slate-100 text-sm truncate">
+                                {appt.patientName}
+                              </span>
+                              <span className="text-[11px] text-slate-400 truncate">
+                                {appt.reason || "General Consultation"} · {format(start, "MMM d")}, {format(start, "p")}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {viewMode === "list" && (
             <DataTable 
               columns={columns} 
               data={appointments} 
               emptyMessage={tx("noData", lang)} 
               rowClassName={(row) => {
                 if (row.id === lastOptimizedId) return "bg-indigo-50 dark:bg-indigo-900/50 border-l-4 border-indigo-500 cursor-pointer transition-colors duration-700";
-                return row.isAiGenerated ? "bg-emerald-100/60 hover:bg-emerald-100 dark:bg-emerald-900/30 cursor-pointer" : "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800";
+                return row.isAiGenerated ? "bg-[#f5fdf5] hover:bg-[#eaf8ea] dark:bg-[#f5fdf5]/5 cursor-pointer" : "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800";
               }}
               onRowClick={handleRowClick}
             />
-          ) : (
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-800" style={{ height: "65vh" }}>
-              <Calendar
-                localizer={localizer}
-                events={appointments.map(appt => ({
-                  id: appt.id,
-                  title: `${appt.patientName} - ${appt.reason}`,
-                  start: new Date(appt.appointmentDate),
-                  end: new Date(new Date(appt.appointmentDate).getTime() + 30 * 60000), // 30 min duration
-                  resource: appt
-                }))}
-                startAccessor="start"
-                endAccessor="end"
-                onSelectEvent={(event: any) => handleRowClick(event.resource)}
-                eventPropGetter={(event: any) => {
-                  let className = "bg-emerald-50 text-emerald-900 border-l-4 border-emerald-500 font-medium text-xs";
-                  if (event.resource.id === lastOptimizedId) {
-                    className = "bg-emerald-500 text-white font-bold animate-pulse shadow-md border-l-4 border-emerald-700 text-xs ring-1 ring-emerald-500";
-                  } else if (event.resource.isAiGenerated) {
-                    className = "bg-teal-50 text-teal-950 border-l-4 border-teal-500 font-medium text-xs";
-                  }
-                  return { className };
-                }}
-                className="font-sans"
-              />
+          )}
+
+          {viewMode === "calendar" && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-4 bg-white px-4 py-3 rounded-xl shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-800 text-sm font-medium">
+                <span className="text-slate-500 text-xs uppercase tracking-wider font-bold mr-2">Legend:</span>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-rose-500 shadow-sm shadow-rose-200"></span>
+                  <span className="text-slate-700 dark:text-slate-300">Urgent</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-amber-500 shadow-sm shadow-amber-200"></span>
+                  <span className="text-slate-700 dark:text-slate-300">Soon</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-emerald-400 shadow-sm shadow-emerald-200"></span>
+                  <span className="text-slate-700 dark:text-slate-300">Routine</span>
+                </div>
+                <div className="flex items-center gap-2 ml-auto pl-4 border-l border-slate-200 dark:border-slate-700">
+                  <Sparkles className="w-4 h-4 text-amber-500" />
+                  <span className="text-slate-700 dark:text-slate-300 font-medium">AI Optimized</span>
+                </div>
+              </div>
+
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-800" style={{ height: "65vh" }}>
+                <Calendar
+                  localizer={localizer}
+                  events={appointments.map(appt => ({
+                    id: appt.id,
+                    title: `${appt.patientName} - ${appt.reason}`,
+                    start: new Date(appt.appointmentDate),
+                    end: new Date(new Date(appt.appointmentDate).getTime() + 30 * 60000), // 30 min duration
+                    resource: appt
+                  }))}
+                  startAccessor="start"
+                  endAccessor="end"
+                  view={calendarView as any}
+                  onView={(view: any) => setCalendarView(view)}
+                  onSelectEvent={(event: any) => handleRowClick(event.resource)}
+                  components={{
+                    event: ({ event }: any) => {
+                      const resource = event.resource;
+                      const prio = resource.priorityLevel || "Routine";
+                      const isAi = resource.isAiGenerated;
+                      
+                      let dotColor = "bg-emerald-400";
+                      if (prio === "Urgent") dotColor = "bg-rose-500";
+                      else if (prio === "Soon" || prio === "High") dotColor = "bg-amber-500";
+                      
+                      return (
+                        <div className="group flex flex-col justify-center px-1.5 py-0.5 h-full w-full relative">
+                          <div className="font-semibold text-xs flex items-center gap-1.5 truncate pr-12">
+                            <span className="truncate">{resource.patientName}</span>
+                            {isAi && <Sparkles className="w-3 h-3 ml-auto shrink-0 opacity-90 text-amber-500" />}
+                          </div>
+                          <div className="text-[10px] truncate opacity-90 flex gap-1 items-center mt-0.5 pr-12">
+                            <span className="font-bold opacity-80 uppercase tracking-tight">{prio}</span>
+                            <span>•</span>
+                            <span>{resource.reason}</span>
+                          </div>
+                          
+                          {/* Actions visible on hover */}
+                          {canBookAppointments && (
+                            <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white/90 backdrop-blur-sm p-0.5 rounded-md shadow-sm border border-slate-200" onClick={(e) => e.stopPropagation()}>
+                               <button type="button" className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors" onClick={(e) => {
+                                 e.stopPropagation();
+                                 setPatientId(resource.patientId.toString());
+                                 setReason(resource.reason);
+                                 if (resource.providerId) setProviderId(resource.providerId.toString());
+                                 if (resource.department) setDepartment(resource.department);
+                                 if (resource.visitType) setVisitType(resource.visitType);
+                                 setPriorityLevel(resource.priorityLevel || "Routine");
+                                 const dt = new Date(resource.appointmentDate);
+                                 setDateStr(dt.toLocaleDateString("en-CA"));
+                                 setTimeStr(dt.toTimeString().slice(0, 5));
+                                 setOptimizeAppointmentId(resource.id);
+                                 setIsDialogOpen(true);
+                               }}>
+                                 <Pencil className="w-3 h-3" />
+                               </button>
+                               <button type="button" className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors" onClick={(e) => {
+                                 e.stopPropagation();
+                                 setDeleteAppointmentId(resource.id);
+                               }}>
+                                 <Trash2 className="w-3 h-3" />
+                               </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                  }}
+                  eventPropGetter={(event: any) => {
+                    const prio = event.resource.priorityLevel || "Routine";
+                    const isAi = event.resource.isAiGenerated;
+                    const isJustOptimized = event.resource.id === lastOptimizedId;
+
+                    if (calendarView === "agenda") {
+                       return { className: "font-sans" };
+                    }
+
+                    let style: any = {
+                      borderRadius: '6px',
+                      color: '#065f46',
+                      backgroundColor: '#d1fae5',
+                      border: '1px solid #6ee7b7',
+                      borderLeft: '4px solid #10b981',
+                    };
+
+                    if (prio === 'Urgent') {
+                      style = {
+                        ...style,
+                        color: '#9f1239',
+                        backgroundColor: '#ffe4e6',
+                        border: '1px solid #fda4af',
+                        borderLeft: '4px solid #f43f5e',
+                      };
+                    } else if (prio === 'Soon' || prio === 'High') {
+                      style = {
+                        ...style,
+                        color: '#92400e',
+                        backgroundColor: '#fef3c7',
+                        border: '1px solid #fcd34d',
+                        borderLeft: '4px solid #f59e0b',
+                      };
+                    }
+
+                    if (isJustOptimized) {
+                      style = {
+                        ...style,
+                        color: '#ffffff',
+                        backgroundColor: '#10b981',
+                        borderLeft: '4px solid #047857',
+                        animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                      };
+                    }
+
+                    return { style, className: "shadow-sm hover:shadow-md transition-shadow" };
+                  }}
+                  className="font-sans"
+                />
+              </div>
             </div>
           )}
         </div>
@@ -545,7 +1174,9 @@ export default function AppointmentsPage() {
                   <Select value={priorityLevel} onValueChange={setPriorityLevel}>
                     <SelectTrigger><SelectValue placeholder="Select Priority" /></SelectTrigger>
                     <SelectContent>
-                      {["Urgent", "Soon", "Routine"].map(level => <SelectItem key={level} value={level}>{level}</SelectItem>)}
+                      <SelectItem value="Urgent">Urgent (within 4 hours)</SelectItem>
+                      <SelectItem value="Soon">Soon (within 48 hours)</SelectItem>
+                      <SelectItem value="Routine">Routine (Next open slot, no acute risk)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -566,7 +1197,20 @@ export default function AppointmentsPage() {
                 </div>
                 <div className="grid gap-2">
                   <Label>{tx("time", lang)}</Label>
-                  <Input type="time" value={timeStr} onChange={e => setTimeStr(e.target.value)} />
+                  <Select value={timeStr} onValueChange={setTimeStr}>
+                    <SelectTrigger><SelectValue placeholder="Select Time" /></SelectTrigger>
+                    <SelectContent className="max-h-48 overflow-y-auto">
+                      {Array.from({ length: 19 }).map((_, i) => {
+                        const hour = Math.floor(i / 2) + 8;
+                        const min = i % 2 === 0 ? "00" : "30";
+                        const time = `${hour.toString().padStart(2, '0')}:${min}`;
+                        const displayHour = hour > 12 ? hour - 12 : hour;
+                        const ampm = hour >= 12 ? "PM" : "AM";
+                        const display = `${displayHour.toString().padStart(2, '0')}:${min} ${ampm}`;
+                        return <SelectItem key={time} value={time}>{display}</SelectItem>;
+                      })}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div className="grid gap-2">
@@ -778,6 +1422,31 @@ export default function AppointmentsPage() {
           </>)}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteAppointmentId !== null} onOpenChange={(open) => !open && setDeleteAppointmentId(null)}>
+        <AlertDialogContent className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 rounded-xl" dir={lang === "ar" ? "rtl" : "ltr"}>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-slate-800 dark:text-slate-100 flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-rose-500" /> 
+              {lang === "ar" ? "تأكيد الحذف" : "Confirm Deletion"}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-500 dark:text-slate-400">
+              {lang === "ar" ? "هل أنت متأكد من حذف هذا الموعد؟ لا يمكن التراجع عن هذا الإجراء." : "Are you sure you want to delete this appointment? This action cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-4">
+            <AlertDialogCancel className="border-slate-200 dark:border-slate-700">{tx("cancel", lang)}</AlertDialogCancel>
+            <AlertDialogAction 
+              className="bg-rose-600 hover:bg-rose-700 text-white"
+              onClick={() => {
+                if (deleteAppointmentId) deleteMutation.mutate(deleteAppointmentId);
+              }}
+            >
+              {lang === "ar" ? "حذف" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DashboardLayout>
   );
 }
