@@ -21,7 +21,7 @@ export function useAuth() {
     /** Admin or Doctor can manage providers */
     canManageProviders: role === "E-Health Admin",
     /** Admin can add/edit/delete patients; Doctor & Nurse can view */
-    canRegisterPatients: role === "E-Health Admin" || role === "Doctor",
+    canRegisterPatients: role === "E-Health Admin" || role === "Nurse",
     /** Only Nurse can record vitals (Doctors only diagnose) */
     canRecordVitals: role === "Nurse",
     /** Nurse and Admin can book appointments, Doctor cannot */

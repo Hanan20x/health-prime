@@ -8,41 +8,46 @@ import {
   LogOut,
   Activity,
   CalendarPlus,
-  CalendarDays,
   Brain,
   Info,
+  BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLang } from "@/hooks/useLang";
 import { useAuth } from "@/hooks/useAuth";
 import { tx } from "@/lib/i18n";
 import { setToken } from "@/api/client";
+import { useQueryClient } from "@tanstack/react-query";
 
 export function AppSidebar() {
   const location = useLocation();
   const navigate = useNavigate();
   const { lang } = useLang();
-  const { isAdmin, canManageProviders, canRecordVitals, canViewEMR } = useAuth();
+  const queryClient = useQueryClient();
+  const { isDoctor, isNurse, canManageProviders, canRecordVitals, canViewEMR, canRegisterPatients } = useAuth();
 
   const navItems = [
-    { key: "dashboard" as const, path: "/dashboard", icon: LayoutDashboard, always: true },
-    { key: "appointments" as const, path: "/appointments", icon: CalendarPlus, always: true },
-    { key: "healthcareProviders" as const, path: "/providers", icon: Users, always: canManageProviders },
-    { key: "patients" as const, path: "/patients", icon: UserRound, always: true },
-    { key: "patientEMR" as const, path: "/patients/emr", icon: ClipboardList, always: canViewEMR },
-    { key: "recordVitals" as const, path: "/vitals/record", icon: Activity, always: canRecordVitals },
-    { key: "howAiWorks" as const, path: "/ai-agents-explained", icon: Brain, always: true },
-    { key: "aboutClinic" as const, path: "/about", icon: Info, always: true },
-  ].filter((item) => item.always);
+    { key: "dashboard" as const, path: "/dashboard", icon: LayoutDashboard, show: true },
+    { key: "appointments" as const, path: "/appointments", icon: CalendarPlus, show: true },
+    { key: "healthcareProviders" as const, path: "/providers", icon: Users, show: canManageProviders },
+    // Admin sees "Patients"; Nurse sees "Patient EMR"; Doctor sees "Patient EMR" (via canViewEMR)
+    { key: "patients" as const, path: "/patients", icon: UserRound, show: !isDoctor && !isNurse },
+    { key: "patientEMR" as const, path: "/patients", icon: ClipboardList, show: isNurse || (canViewEMR && !canRegisterPatients) },
+    { key: "recordVitals" as const, path: "/vitals/record", icon: Activity, show: canRecordVitals },
+    { key: "vitalSigns" as const, path: "/vitals/record?view=trends", icon: BarChart3, show: isDoctor },
+    { key: "howAiWorks" as const, path: "/ai-agents-explained", icon: Brain, show: true },
+    { key: "aboutClinic" as const, path: "/about", icon: Info, show: true },
+  ].filter((item) => item.show);
 
   const handleLogout = () => {
     setToken(null);
+    queryClient.clear();
     navigate("/login", { replace: true });
   };
 
   return (
     <aside
-      className="flex flex-col w-64 min-h-screen bg-sidebar text-sidebar-foreground shrink-0"
+      className="sticky top-0 h-screen flex flex-col w-64 bg-sidebar text-sidebar-foreground shrink-0 overflow-y-auto"
       dir={lang === "ar" ? "rtl" : "ltr"}
     >
       {/* Logo area */}

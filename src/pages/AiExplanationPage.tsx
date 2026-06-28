@@ -236,7 +236,7 @@ export default function AiExplanationPage() {
                 <span className="font-bold text-primary">2.</span>
                 <span>
                   <strong>{lang === "ar" ? "عقدة القرار (LLM):" : "Decision Node (LLM):"}</strong>{" "}
-                  {lang === "ar" ? "يستخدم نموذجاً لغوياً كبيراً (Llama-3.3-70b-versatile عبر ChatGroq) لتحليل الحالة، وموازنة عوامل الأولوية، وإخراج هيكل بيانات (JSON) دقيق للموعد الأمثل." : "Utilizes a Large Language Model (Llama-3.3-70b-versatile via ChatGroq) to analyze the state, weigh priority factors, and output a strictly-typed JSON structure for the optimal appointment."}
+                  {lang === "ar" ? "يستخدم نموذجاً لغوياً كبيراً (Gemini 2.5 Flash عبر Google AI) لتحليل الحالة، وموازنة عوامل الأولوية، وإخراج هيكل بيانات (JSON) دقيق للموعد الأمثل." : "Utilizes a Large Language Model (Gemini 2.5 Flash via Google AI) to analyze the state, weigh priority factors, and output a strictly-typed JSON structure for the optimal appointment."}
                 </span>
               </li>
             </ul>
@@ -280,7 +280,7 @@ export default function AiExplanationPage() {
                   </li>
                   <li className="flex gap-2 items-start">
                     <span className="font-bold text-amber-600 dark:text-amber-500">3.</span>
-                    <span>{lang === "ar" ? "يولد الذكاء الاصطناعي قائمة بالتشخيصات المحتملة مع نسب الثقة والتبرير السريري." : "The LLM AI generates candidate ICD-10-CM diagnoses with confidence scores and clinical reasoning."}</span>
+                    <span>{lang === "ar" ? "يقوم Gemini 2.5 Flash (مع وضع التفكير الممتد) بتوليد قائمة بالتشخيصات المحتملة مع نسب الثقة والتبرير السريري." : "Gemini 2.5 Flash (with extended reasoning enabled) generates candidate ICD-10-CM diagnoses with confidence scores and clinical reasoning."}</span>
                   </li>
                   <li className="flex gap-2 items-start">
                     <span className="font-bold text-amber-600 dark:text-amber-500">4.</span>
@@ -322,9 +322,9 @@ export default function AiExplanationPage() {
                       {lang === "ar" ? "2. البحث المدعم بالسياق (RAG)" : "2. Contextual RAG Retrieval"}
                     </div>
                     <p className="text-xs text-slate-600 dark:text-slate-400">
-                      {lang === "ar" 
-                        ? "يستخدم محرك (BM25) للبحث في الأدلة السريرية، ويضمن توافق الاقتراحات مع البروتوكولات القياسية." 
-                        : "Uses a BM25 Search Engine to scan verified clinical manuals, grounding the AI's generation strictly within standard care protocols and evidence-based medicine."}
+                      {lang === "ar"
+                        ? "يستخدم محركين: بحث NLM في قاعدة بيانات ICD-10-CM الرسمية، ومحرك BM25 محلي للبحث في الأدلة السريرية — لضمان توافق الاقتراحات مع البروتوكولات القياسية."
+                        : "Uses two retrieval layers: an NLM ICD-10-CM API search for live code lookup, and a local BM25 keyword engine scanning indexed clinical manuals, grounding the AI strictly within evidence-based protocols."}
                     </p>
                   </div>
 
@@ -357,6 +357,94 @@ export default function AiExplanationPage() {
           </div>
         </div>
 
+        {/* Detailed Scoring Breakdown */}
+        <Card className="shadow-sm border-slate-200 dark:border-slate-800 mt-6">
+          <CardHeader>
+            <CardTitle className="text-lg">
+              {lang === "ar" ? "كيف يتم حساب مستوى الثقة؟" : "How is the Confidence Score Calculated?"}
+            </CardTitle>
+            <CardDescription>
+              {lang === "ar" 
+                ? "يتحقق كل مقياس من نوع مختلف من الأدلة في سجل المريض، وتعكس الأوزان مدى موثوقية هذا النوع من الأدلة للترميز." 
+                : "Each signal checks a different kind of evidence in the patient's record, and the weights reflect how trustworthy that kind of evidence is for ICD-10 coding."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid lg:grid-cols-2 gap-4">
+              {/* 1. Symptoms */}
+              <div className="p-4 rounded-xl border border-emerald-100 bg-emerald-50/50 dark:border-emerald-900/30 dark:bg-emerald-950/20">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold">
+                    <Stethoscope className="w-4 h-4" />
+                    1. Symptom-criteria match
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-300 text-[10px] font-black tracking-widest">30%</span>
+                </div>
+                <p className="text-[11px] font-semibold text-emerald-800/70 dark:text-emerald-300/70 italic mb-2">Does what the doctor wrote match the official criteria?</p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">This is the heaviest weight because it's the most direct evidence. The agent compares the symptoms in the Chief Complaints against textbook criteria. If symptoms don't fit, nothing else can save the suggestion.</p>
+              </div>
+
+              {/* 2. Labs */}
+              <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/50 dark:border-blue-900/30 dark:bg-blue-950/20">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 text-blue-700 dark:text-blue-400 font-bold">
+                    <Activity className="w-4 h-4" />
+                    2. Lab and vital alignment
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md bg-blue-200 dark:bg-blue-900 text-blue-800 dark:text-blue-300 text-[10px] font-black tracking-widest">25%</span>
+                </div>
+                <p className="text-[11px] font-semibold text-blue-800/70 dark:text-blue-300/70 italic mb-2">Do the numbers back up the story?</p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">Symptoms can be subjective, but structured numeric data (labs, vitals) is objective. This checks whether numbers are consistent with the diagnosis, weighted highly because numbers are harder to misinterpret.</p>
+              </div>
+
+              {/* 3. RAG */}
+              <div className="p-4 rounded-xl border border-indigo-100 bg-indigo-50/50 dark:border-indigo-900/30 dark:bg-indigo-950/20">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 text-indigo-700 dark:text-indigo-400 font-bold">
+                    <Sparkles className="w-4 h-4" />
+                    3. RAG similarity score
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-300 text-[10px] font-black tracking-widest">20%</span>
+                </div>
+                <p className="text-[11px] font-semibold text-indigo-800/70 dark:text-indigo-300/70 italic mb-2">How closely does this case resemble reference material?</p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">The retrieval step: how well the ICD-10 codes retrieved from the NLM API and BM25 local manual match the patient case. Weighted lower as it measures similarity to general literature, not the specific clinical picture.</p>
+              </div>
+
+              {/* 4. Consistency */}
+              <div className="p-4 rounded-xl border border-purple-100 bg-purple-50/50 dark:border-purple-900/30 dark:bg-purple-950/20">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 text-purple-700 dark:text-purple-400 font-bold">
+                    <Brain className="w-4 h-4" />
+                    4. Self-consistency
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md bg-purple-200 dark:bg-purple-900 text-purple-800 dark:text-purple-300 text-[10px] font-black tracking-widest">15%</span>
+                </div>
+                <p className="text-[11px] font-semibold text-purple-800/70 dark:text-purple-300/70 italic mb-2">Does the model give the same answer multiple times?</p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">A model-reliability check. High agreement across runs suggests it isn't guessing. Useful as a sanity check on the AI itself, but doesn't independently verify clinical correctness.</p>
+              </div>
+
+              {/* 5. Comorbidity */}
+              <div className="p-4 rounded-xl border border-amber-100 bg-amber-50/50 dark:border-amber-900/30 dark:bg-amber-950/20 lg:col-span-2">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-bold">
+                    <Users className="w-4 h-4" />
+                    5. Comorbidity prior
+                  </div>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-300 text-[10px] font-black tracking-widest">10%</span>
+                </div>
+                <p className="text-[11px] font-semibold text-amber-800/70 dark:text-amber-300/70 italic mb-2">Does this make epidemiological sense?</p>
+                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">A base-rate adjustment. A patient with obesity and hypertension is statistically more likely to have type 2 diabetes. Weighted lowest as it's correlation, not direct observation.</p>
+              </div>
+            </div>
+
+            <div className="p-4 mt-2 bg-slate-100/50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800 flex items-start gap-3">
+              <ShieldCheck className="w-5 h-5 text-slate-700 dark:text-slate-300 shrink-0 mt-0.5" />
+              <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
+                <span className="font-bold">Why the weighting works this way overall:</span> The system prioritizes direct clinical evidence (symptoms, labs) over indirect evidence (literature similarity, statistical priors), and treats the model's own self-consistency as a smaller, separate trust signal layered on top.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
         {/* Fallback AI Mode */}
         <Card className="shadow-sm border-slate-200 dark:border-slate-800 bg-amber-50/50 dark:bg-amber-950/10 mt-6">
           <CardHeader>

@@ -25,6 +25,7 @@ class UserOut(APIModel):
     full_name: str
     role: str
     avatar_url: str | None = None
+    totp_enabled: bool = False
 
 
 class UserUpdate(APIModel):
@@ -37,12 +38,22 @@ class AuthResponse(APIModel):
     token_type: str = "bearer"
     user: UserOut | None = None
     requires_otp: bool = False
+    otp_method: str | None = None  # "email" or "totp"
 
 
 class LoginIn(APIModel):
     email: str = Field(pattern=r"^[a-zA-Z0-9_.+-]+@healthprime\.sa$")
     password: str = Field(min_length=8)
     otp: str | None = None
+
+
+class TotpSetupOut(APIModel):
+    secret: str
+    qr_uri: str
+
+
+class TotpEnableIn(APIModel):
+    code: str
 
 
 # --- Patients ---
@@ -329,6 +340,11 @@ class AppointmentCreate(APIModel):
     department: str | None = None
     visit_type: str | None = None
     priority_level: str | None = None
+    is_ai_generated: bool | None = False
+    ai_explanation: str | None = None
+    manual_slots_affected: str | None = None
+    optimization_diffs: str | None = None
+    status: str | None = "Scheduled"
 
 
 class AppointmentOut(APIModel):
@@ -345,6 +361,7 @@ class AppointmentOut(APIModel):
     visit_type: str | None = None
     ai_explanation: str | None = None
     manual_slots_affected: str | None = None
+    optimization_diffs: str | None = None
     
     # Nested fields for UI convenience
     patient_name: str | None = None
@@ -452,7 +469,8 @@ class DiagnosisCreate(APIModel):
     status: str = "Active"
 
 class DiagnosisUpdate(APIModel):
-    status: str
+    status: str | None = None
+    notes: str | None = None
 
 class DiagnosisOut(APIModel):
     id: int
@@ -546,6 +564,11 @@ class AppointmentCreate(APIModel):
     department: str | None = None
     visit_type: str | None = None
     priority_level: str | None = None
+    is_ai_generated: bool | None = False
+    ai_explanation: str | None = None
+    manual_slots_affected: str | None = None
+    optimization_diffs: str | None = None
+    status: str | None = "Scheduled"
     is_ai_generated: bool | None = None
     ai_explanation: str | None = None
     manual_slots_affected: str | None = None
@@ -592,6 +615,7 @@ class OptimizationRequest(APIModel):
     department: str | None = None
     visit_type: str | None = None
     priority_level: str | None = None
+    utc_datetime: str | None = None
 
 class OptimizationDiffField(APIModel):
     field: str

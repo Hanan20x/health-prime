@@ -120,7 +120,7 @@ export default function PatientsListPage() {
             size="icon"
             className="h-8 w-8 text-teal-600 hover:bg-teal-50"
             onClick={() => navigate(`/vitals/record?patientId=${row.id}`)}
-            title={tx("recordVitals", lang)}
+            title={tx("vitalSigns", lang)}
           >
             <HeartPulse className="w-4 h-4" />
           </Button>

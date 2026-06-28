@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -92,7 +92,8 @@ interface OptimizationReview {
 export default function AppointmentsPage() {
   const qc = useQueryClient();
   const { lang } = useLang();
-  const { canBookAppointments } = useAuth();
+  const { canBookAppointments, role } = useAuth();
+  const canManageAppointments = canBookAppointments || role === "Doctor";
   const location = useLocation();
   
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -185,7 +186,8 @@ export default function AppointmentsPage() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["appointments"] });
-      toast.success(lang === "ar" ? "تم حذف الموعد" : "Appointment deleted successfully");
+      setDeleteAppointmentId(null);
+      toast.success(lang === "ar" ? "ØªÙ… Ø­Ø°Ù Ø§Ù„Ù…ÙˆØ¹Ø¯" : "Appointment deleted successfully");
     },
     onError: () => toast.error(tx("error", lang)),
   });
@@ -198,7 +200,7 @@ export default function AppointmentsPage() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["appointments"] });
-      toast.success(lang === "ar" ? "تم تحديث الحالة" : "Status updated");
+      toast.success(lang === "ar" ? "ØªÙ… ØªØ­Ø¯ÙŠØ« Ø§Ù„Ø­Ø§Ù„Ø©" : "Status updated");
     },
     onError: () => toast.error(tx("error", lang)),
   });
@@ -253,6 +255,8 @@ export default function AppointmentsPage() {
       });
     }
 
+    const hasAiChanges = optimizationReview?.diffs.some(d => d.flag) || false;
+    
     const payload = {
       patientId: Number(patientId),
       providerId: finalProviderId ? Number(finalProviderId) : undefined,
@@ -261,7 +265,7 @@ export default function AppointmentsPage() {
       department,
       visitType,
       priorityLevel: finalPriority || "Routine",
-      isAiGenerated: true,
+      isAiGenerated: hasAiChanges,
       aiExplanation: optimizationReview?.aiExplanation,
       manualSlotsAffected: optimizationReview?.manualSlotsAffected,
       optimizationDiffs: JSON.stringify(optimizationReview?.diffs || []),
@@ -302,11 +306,16 @@ export default function AppointmentsPage() {
       toast.error(tx("fillRequiredFields", lang));
       return;
     }
+    
+    // Create an ISO UTC string of the requested time
+    const utcDateTime = new Date(`${dateStr}T${timeStr}`).toISOString();
+    
     optimizeMutation.mutate({
       patientId: parseInt(patientId),
       providerId: providerId ? parseInt(providerId) : undefined,
       appointmentDate: dateStr,
       timeStr,
+      utc_datetime: utcDateTime,
       reason,
       department,
       visitType,
@@ -341,10 +350,10 @@ export default function AppointmentsPage() {
       accessor: (row) => (
         <div className="flex flex-col items-center text-center">
           <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-            {format(new Date(row.appointmentDate), "p")}
+            {row.appointmentDate && !isNaN(new Date(row.appointmentDate).getTime()) ? format(new Date(row.appointmentDate), "p") : "--:--"}
           </span>
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            {format(new Date(row.appointmentDate), "MMM d, yyyy")}
+            {row.appointmentDate && !isNaN(new Date(row.appointmentDate).getTime()) ? format(new Date(row.appointmentDate), "MMM d, yyyy") : "Invalid Date"}
           </span>
         </div>
       ) 
@@ -362,7 +371,7 @@ export default function AppointmentsPage() {
       )
     },
     { 
-      header: lang === "ar" ? "مزود الرعاية الصحية" : "Healthcare Provider", 
+      header: lang === "ar" ? "Ù…Ø²ÙˆØ¯ Ø§Ù„Ø±Ø¹Ø§ÙŠØ© Ø§Ù„ØµØ­ÙŠØ©" : "Healthcare Provider", 
       className: "text-center",
       accessor: (row) => (
         <div className="flex flex-col items-center text-center">
@@ -452,7 +461,7 @@ export default function AppointmentsPage() {
           <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => handleRowClick(row)}>
             <Eye className="w-3.5 h-3.5" />
           </Button>
-          {canBookAppointments && (
+          {canManageAppointments && (
             <>
               <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => {
                 setPatientId(row.patientId.toString());
@@ -500,14 +509,15 @@ export default function AppointmentsPage() {
 
   const overviewColumns: Column<AppointmentRow>[] = [
     {
-      header: lang === "ar" ? "المريض" : "PATIENT",
+      header: lang === "ar" ? "Ø§Ù„Ù…Ø±ÙŠØ¶" : "PATIENT",
       accessor: (row) => {
         const patientObj = patients.find(p => p.id === row.patientId);
         const nationalId = patientObj?.nationalId || `ID: #${row.patientId}`;
-        const initials = row.patientName
+        const initials = (row.patientName && typeof row.patientName === 'string')
           ? row.patientName
               .split(" ")
-              .map((n) => n[0])
+              .filter(Boolean)
+              .map((n) => n[0] || "")
               .join("")
               .slice(0, 2)
               .toUpperCase()
@@ -530,37 +540,37 @@ export default function AppointmentsPage() {
       }
     },
     {
-      header: lang === "ar" ? "الخدمة" : "SERVICE",
+      header: lang === "ar" ? "Ø§Ù„Ø®Ø¯Ù…Ø©" : "SERVICE",
       accessor: (row) => (
         <div className="flex flex-col text-left">
           <span className="font-semibold text-slate-700 dark:text-slate-200 text-sm">
             {row.reason}
           </span>
           <span className="text-[11px] text-slate-400 font-medium">
-            {row.visitType || "General Consultation"} · 30 min
+            {row.visitType || "General Consultation"} Â· 30 min
           </span>
         </div>
       )
     },
     {
-      header: lang === "ar" ? "التاريخ والوقت" : "DATE & TIME",
+      header: lang === "ar" ? "Ø§Ù„ØªØ§Ø±ÙŠØ® ÙˆØ§Ù„ÙˆÙ‚Øª" : "DATE & TIME",
       accessor: (row) => {
         const start = new Date(row.appointmentDate);
         const end = new Date(start.getTime() + 30 * 60000);
         return (
           <div className="flex flex-col text-left">
             <span className="font-bold text-slate-800 dark:text-slate-100 text-sm">
-              {format(start, "MMM d, yyyy")}
+              {!isNaN(start.getTime()) ? format(start, "MMM d, yyyy") : "Invalid Date"}
             </span>
             <span className="text-[11px] text-slate-400 font-medium">
-              {format(start, "p")} - {format(end, "p")}
+              {!isNaN(start.getTime()) ? format(start, "p") : "--:--"} - {!isNaN(end.getTime()) ? format(end, "p") : "--:--"}
             </span>
           </div>
         );
       }
     },
     {
-      header: lang === "ar" ? "المصدر" : "SOURCE",
+      header: lang === "ar" ? "Ø§Ù„Ù…ØµØ¯Ø±" : "SOURCE",
       accessor: (row) => (
         <div className="flex justify-start">
           {row.isAiGenerated ? (
@@ -577,7 +587,7 @@ export default function AppointmentsPage() {
       )
     },
     {
-      header: lang === "ar" ? "الحالة" : "STATUS",
+      header: lang === "ar" ? "Ø§Ù„Ø­Ø§Ù„Ø©" : "STATUS",
       accessor: (row) => {
         const status = row.status || "Scheduled";
         let colorClass = "bg-blue-50 text-blue-700 border-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800/50";
@@ -598,7 +608,7 @@ export default function AppointmentsPage() {
       }
     },
     {
-      header: lang === "ar" ? "الإجراءات" : "ACTIONS",
+      header: lang === "ar" ? "Ø§Ù„Ø¥Ø¬Ø±Ø§Ø¡Ø§Øª" : "ACTIONS",
       accessor: (row) => (
         <div className="flex items-center gap-1 justify-start" onClick={(e) => e.stopPropagation()}>
           {(row.status === "Scheduled" || !row.status) && canBookAppointments && (
@@ -666,25 +676,51 @@ export default function AppointmentsPage() {
     return date.getTime() > todayEnd.getTime();
   };
 
-  const filteredAppointments = appointments.filter(appt => {
+  const filteredAppointments = useMemo(() => {
+    let result = appointments.filter(a => a.status !== "Cancelled");
+
     if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      const patientMatch = appt.patientName?.toLowerCase().includes(term);
-      const providerMatch = appt.providerName?.toLowerCase().includes(term);
-      const reasonMatch = appt.reason?.toLowerCase().includes(term);
-      const deptMatch = appt.department?.toLowerCase().includes(term);
-      if (!patientMatch && !providerMatch && !reasonMatch && !deptMatch) return false;
+      const q = searchTerm.toLowerCase();
+      result = result.filter(a => 
+        (a.patientName && a.patientName.toLowerCase().includes(q)) || 
+        (a.reason && a.reason.toLowerCase().includes(q)) ||
+        (a.providerName && a.providerName.toLowerCase().includes(q)) ||
+        (a.department && a.department.toLowerCase().includes(q))
+      );
     }
-    if (filterPriority !== "all") {
-      const priority = appt.priorityLevel || "Routine";
-      if (priority.toLowerCase() !== filterPriority.toLowerCase()) return false;
+    
+    if (filterPriority && filterPriority !== "all") {
+      const priority = (a: any) => (a.priorityLevel || "Routine").toLowerCase();
+      result = result.filter(a => priority(a) === filterPriority.toLowerCase());
     }
-    if (filterBookingType !== "all") {
-      if (filterBookingType === "ai" && !appt.isAiGenerated) return false;
-      if (filterBookingType === "manual" && appt.isAiGenerated) return false;
+    
+    if (filterBookingType && filterBookingType !== "all") {
+      if (filterBookingType === "ai") result = result.filter(a => a.isAiGenerated);
+      if (filterBookingType === "manual") result = result.filter(a => !a.isAiGenerated);
     }
-    return true;
-  });
+
+    if (department && department !== "all") {
+      result = result.filter(a => a.department === department);
+    }
+
+    if (visitType && visitType !== "all") {
+      result = result.filter(a => a.visitType === visitType);
+    }
+
+    if (dateStr) {
+      result = result.filter(a => {
+        if (!a.appointmentDate) return false;
+        try {
+          const d = new Date(a.appointmentDate);
+          return d.toLocaleDateString("en-CA") === dateStr;
+        } catch (e) {
+          return false;
+        }
+      });
+    }
+    
+    return result;
+  }, [appointments, searchTerm, filterPriority, filterBookingType, department, visitType, dateStr]);
 
   const todayAppointments = filteredAppointments.filter(appt => isToday(appt.appointmentDate));
   const upcomingAppointments = filteredAppointments
@@ -705,7 +741,7 @@ export default function AppointmentsPage() {
                 onClick={() => setViewMode("overview")}
                 className={`text-sm ${viewMode === "overview" ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90" : "text-slate-500 hover:text-slate-700 dark:text-slate-400"}`}
               >
-                {lang === "ar" ? "نظرة عامة" : "Overview"}
+                {lang === "ar" ? "Ù†Ø¸Ø±Ø© Ø¹Ø§Ù…Ø©" : "Overview"}
               </Button>
               <Button 
                 variant={viewMode === "list" ? "default" : "ghost"} 
@@ -713,7 +749,7 @@ export default function AppointmentsPage() {
                 onClick={() => setViewMode("list")}
                 className={`text-sm ${viewMode === "list" ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90" : "text-slate-500 hover:text-slate-700 dark:text-slate-400"}`}
               >
-                {lang === "ar" ? "القائمة" : "List"}
+                {lang === "ar" ? "Ø§Ù„Ù‚Ø§Ø¦Ù…Ø©" : "List"}
               </Button>
               <Button 
                 variant={viewMode === "calendar" ? "default" : "ghost"} 
@@ -721,7 +757,7 @@ export default function AppointmentsPage() {
                 onClick={() => setViewMode("calendar")}
                 className={`text-sm ${viewMode === "calendar" ? "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90" : "text-slate-500 hover:text-slate-700 dark:text-slate-400"}`}
               >
-                {lang === "ar" ? "التقويم" : "Calendar"}
+                {lang === "ar" ? "Ø§Ù„ØªÙ‚ÙˆÙŠÙ…" : "Calendar"}
               </Button>
             </div>
             {canBookAppointments && (
@@ -745,28 +781,28 @@ export default function AppointmentsPage() {
               {/* StatCards Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <StatCard
-                  title={lang === "ar" ? "تاريخ اليوم" : "Today's Date"}
+                  title={lang === "ar" ? "ØªØ§Ø±ÙŠØ® Ø§Ù„ÙŠÙˆÙ…" : "Today's Date"}
                   value={todayStr}
                   icon={CalendarIcon}
-                  description={lang === "ar" ? "التاريخ الحالي" : "Current date"}
+                  description={lang === "ar" ? "Ø§Ù„ØªØ§Ø±ÙŠØ® Ø§Ù„Ø­Ø§Ù„ÙŠ" : "Current date"}
                 />
                 <StatCard
-                  title={lang === "ar" ? "المواعيد القادمة المؤكدة" : "Upcoming Booked & Confirmed"}
+                  title={lang === "ar" ? "Ø§Ù„Ù…ÙˆØ§Ø¹ÙŠØ¯ Ø§Ù„Ù‚Ø§Ø¯Ù…Ø© Ø§Ù„Ù…Ø¤ÙƒØ¯Ø©" : "Upcoming Booked & Confirmed"}
                   value={upcomingBookedCount}
                   icon={Clock}
-                  description={lang === "ar" ? "الحجوزات القادمة غير الملغاة" : "Scheduled future slots"}
+                  description={lang === "ar" ? "Ø§Ù„Ø­Ø¬ÙˆØ²Ø§Øª Ø§Ù„Ù‚Ø§Ø¯Ù…Ø© ØºÙŠØ± Ø§Ù„Ù…Ù„ØºØ§Ø©" : "Scheduled future slots"}
                 />
                 <StatCard
-                  title={lang === "ar" ? "عدد المرضى" : "Patients"}
+                  title={lang === "ar" ? "Ø¹Ø¯Ø¯ Ø§Ù„Ù…Ø±Ø¶Ù‰" : "Patients"}
                   value={distinctPatientsCount}
                   icon={Users}
-                  description={lang === "ar" ? "المرضى المسجلين في المواعيد" : "Distinct patients scheduled"}
+                  description={lang === "ar" ? "Ø§Ù„Ù…Ø±Ø¶Ù‰ Ø§Ù„Ù…Ø³Ø¬Ù„ÙŠÙ† ÙÙŠ Ø§Ù„Ù…ÙˆØ§Ø¹ÙŠØ¯" : "Distinct patients scheduled"}
                 />
                 <StatCard
-                  title={lang === "ar" ? "الملغاة" : "Cancellation"}
+                  title={lang === "ar" ? "Ø§Ù„Ù…Ù„ØºØ§Ø©" : "Cancellation"}
                   value={cancellationsCount}
                   icon={AlertCircle}
-                  description={lang === "ar" ? "المواعيد الملغاة" : "Cancelled appointments"}
+                  description={lang === "ar" ? "Ø§Ù„Ù…ÙˆØ§Ø¹ÙŠØ¯ Ø§Ù„Ù…Ù„ØºØ§Ø©" : "Cancelled appointments"}
                 />
               </div>
 
@@ -774,7 +810,7 @@ export default function AppointmentsPage() {
               <div className="flex flex-wrap items-center gap-3 bg-card border border-border/50 p-4 rounded-xl shadow-sm ring-1 ring-border/5">
                 <div className="flex-1 min-w-[200px]">
                   <Input
-                    placeholder={lang === "ar" ? "البحث عن طريق اسم المريض أو الطبيب..." : "Search by patient, provider or department..."}
+                    placeholder={lang === "ar" ? "Ø§Ù„Ø¨Ø­Ø« Ø¹Ù† Ø·Ø±ÙŠÙ‚ Ø§Ø³Ù… Ø§Ù„Ù…Ø±ÙŠØ¶ Ø£Ùˆ Ø§Ù„Ø·Ø¨ÙŠØ¨..." : "Search by patient, provider or department..."}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="h-9 text-sm bg-white dark:bg-slate-950"
@@ -786,10 +822,10 @@ export default function AppointmentsPage() {
                       <SelectValue placeholder="Priority" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">{lang === "ar" ? "كل الأولويات" : "All Priorities"}</SelectItem>
-                      <SelectItem value="urgent">{lang === "ar" ? "عاجل" : "Urgent"}</SelectItem>
-                      <SelectItem value="soon">{lang === "ar" ? "قريباً" : "Soon"}</SelectItem>
-                      <SelectItem value="routine">{lang === "ar" ? "روتيني" : "Routine"}</SelectItem>
+                      <SelectItem value="all">{lang === "ar" ? "ÙƒÙ„ Ø§Ù„Ø£ÙˆÙ„ÙˆÙŠØ§Øª" : "All Priorities"}</SelectItem>
+                      <SelectItem value="urgent">{lang === "ar" ? "Ø¹Ø§Ø¬Ù„" : "Urgent"}</SelectItem>
+                      <SelectItem value="soon">{lang === "ar" ? "Ù‚Ø±ÙŠØ¨Ø§Ù‹" : "Soon"}</SelectItem>
+                      <SelectItem value="routine">{lang === "ar" ? "Ø±ÙˆØªÙŠÙ†ÙŠ" : "Routine"}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -799,9 +835,9 @@ export default function AppointmentsPage() {
                       <SelectValue placeholder="Booking Type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">{lang === "ar" ? "كل أنواع الحجز" : "All Bookings"}</SelectItem>
-                      <SelectItem value="ai">{lang === "ar" ? "محسن بالذكاء الاصطناعي" : "AI Optimized"}</SelectItem>
-                      <SelectItem value="manual">{lang === "ar" ? "حجز يدوي" : "Manual Booking"}</SelectItem>
+                      <SelectItem value="all">{lang === "ar" ? "ÙƒÙ„ Ø£Ù†ÙˆØ§Ø¹ Ø§Ù„Ø­Ø¬Ø²" : "All Bookings"}</SelectItem>
+                      <SelectItem value="ai">{lang === "ar" ? "Ù…Ø­Ø³Ù† Ø¨Ø§Ù„Ø°ÙƒØ§Ø¡ Ø§Ù„Ø§ØµØ·Ù†Ø§Ø¹ÙŠ" : "AI Optimized"}</SelectItem>
+                      <SelectItem value="manual">{lang === "ar" ? "Ø­Ø¬Ø² ÙŠØ¯ÙˆÙŠ" : "Manual Booking"}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -815,7 +851,7 @@ export default function AppointmentsPage() {
                     }}
                     className="h-9 px-3 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50"
                   >
-                    {lang === "ar" ? "إعادة ضبط" : "Clear Filters"}
+                    {lang === "ar" ? "Ø¥Ø¹Ø§Ø¯Ø© Ø¶Ø¨Ø·" : "Clear Filters"}
                   </Button>
                 )}
               </div>
@@ -831,7 +867,7 @@ export default function AppointmentsPage() {
                       </div>
                       <div className="flex flex-col">
                         <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-none mb-1">
-                          {lang === "ar" ? "جدول اليوم" : "Today's Schedule"}
+                          {lang === "ar" ? "Ø¬Ø¯ÙˆÙ„ Ø§Ù„ÙŠÙˆÙ…" : "Today's Schedule"}
                         </h3>
                         <p className="text-xs text-slate-400">
                           {new Date().toLocaleDateString(lang === "ar" ? "ar-SA" : "en-US", { weekday: "long", month: "short", day: "numeric" })}
@@ -839,14 +875,14 @@ export default function AppointmentsPage() {
                       </div>
                     </div>
                     <span className="text-xs bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 px-3 py-1 rounded-full font-bold">
-                      {todayAppointments.length} {todayAppointments.length === 1 ? (lang === "ar" ? "موعد" : "appointment") : (lang === "ar" ? "مواعيد" : "appointments")}
+                      {todayAppointments.length} {todayAppointments.length === 1 ? (lang === "ar" ? "Ù…ÙˆØ¹Ø¯" : "appointment") : (lang === "ar" ? "Ù…ÙˆØ§Ø¹ÙŠØ¯" : "appointments")}
                     </span>
                   </div>
                   
                   <DataTable
                     columns={overviewColumns}
                     data={todayAppointments}
-                    emptyMessage={lang === "ar" ? "لا توجد مواعيد اليوم" : "No appointments scheduled for today"}
+                    emptyMessage={lang === "ar" ? "Ù„Ø§ ØªÙˆØ¬Ø¯ Ù…ÙˆØ§Ø¹ÙŠØ¯ Ø§Ù„ÙŠÙˆÙ…" : "No appointments scheduled for today"}
                     rowClassName={(row) => {
                       if (row.id === lastOptimizedId) return "bg-indigo-50 dark:bg-indigo-900/50 border-l-4 border-indigo-500 cursor-pointer transition-colors duration-700";
                       return row.isAiGenerated ? "bg-[#f5fdf5]/50 hover:bg-[#eaf8ea]/50 dark:bg-[#f5fdf5]/5 cursor-pointer" : "cursor-pointer hover:bg-slate-50/50 dark:hover:bg-slate-800/50";
@@ -864,7 +900,7 @@ export default function AppointmentsPage() {
                       </div>
                       <div className="flex flex-col">
                         <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 leading-none">
-                          {lang === "ar" ? "قريباً" : "Upcoming"}
+                          {lang === "ar" ? "Ù‚Ø±ÙŠØ¨Ø§Ù‹" : "Upcoming"}
                         </h3>
                       </div>
                     </div>
@@ -872,14 +908,14 @@ export default function AppointmentsPage() {
                       onClick={() => setViewMode("list")}
                       className="text-xs font-semibold text-primary hover:underline flex items-center gap-1 bg-transparent border-0 cursor-pointer"
                     >
-                      {lang === "ar" ? "عرض الكل" : "See all"} →
+                      {lang === "ar" ? "Ø¹Ø±Ø¶ Ø§Ù„ÙƒÙ„" : "See all"} â†’
                     </button>
                   </div>
 
                   <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
                     {upcomingAppointments.length === 0 ? (
                       <div className="text-center py-8 text-slate-400 text-sm">
-                        {lang === "ar" ? "لا توجد مواعيد قادمة" : "No upcoming appointments"}
+                        {lang === "ar" ? "Ù„Ø§ ØªÙˆØ¬Ø¯ Ù…ÙˆØ§Ø¹ÙŠØ¯ Ù‚Ø§Ø¯Ù…Ø©" : "No upcoming appointments"}
                       </div>
                     ) : (
                       upcomingAppointments.map((appt) => {
@@ -896,7 +932,7 @@ export default function AppointmentsPage() {
                                 {appt.patientName}
                               </span>
                               <span className="text-[11px] text-slate-400 truncate">
-                                {appt.reason || "General Consultation"} · {format(start, "MMM d")}, {format(start, "p")}
+                                {appt.reason || "General Consultation"} · {!isNaN(start.getTime()) ? `${format(start, "MMM d")}, ${format(start, "p")}` : "Invalid Date"}
                               </span>
                             </div>
                           </div>
@@ -912,7 +948,7 @@ export default function AppointmentsPage() {
           {viewMode === "list" && (
             <DataTable 
               columns={columns} 
-              data={appointments} 
+              data={filteredAppointments} 
               emptyMessage={tx("noData", lang)} 
               rowClassName={(row) => {
                 if (row.id === lastOptimizedId) return "bg-indigo-50 dark:bg-indigo-900/50 border-l-4 border-indigo-500 cursor-pointer transition-colors duration-700";
@@ -944,14 +980,14 @@ export default function AppointmentsPage() {
                 </div>
               </div>
 
-              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-800" style={{ height: "65vh" }}>
+              <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 dark:bg-slate-900 dark:border-slate-800" style={{ height: "82vh" }}>
                 <Calendar
                   localizer={localizer}
                   events={appointments.map(appt => ({
                     id: appt.id,
                     title: `${appt.patientName} - ${appt.reason}`,
                     start: new Date(appt.appointmentDate),
-                    end: new Date(new Date(appt.appointmentDate).getTime() + 30 * 60000), // 30 min duration
+                    end: new Date(new Date(appt.appointmentDate).getTime() + 30 * 60000),
                     resource: appt
                   }))}
                   startAccessor="start"
@@ -962,27 +998,18 @@ export default function AppointmentsPage() {
                   components={{
                     event: ({ event }: any) => {
                       const resource = event.resource;
-                      const prio = resource.priorityLevel || "Routine";
                       const isAi = resource.isAiGenerated;
-                      
-                      let dotColor = "bg-emerald-400";
-                      if (prio === "Urgent") dotColor = "bg-rose-500";
-                      else if (prio === "Soon" || prio === "High") dotColor = "bg-amber-500";
-                      
+                      const timeLabel = new Date(resource.appointmentDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
                       return (
-                        <div className="group flex flex-col justify-center px-1.5 py-0.5 h-full w-full relative">
-                          <div className="font-semibold text-xs flex items-center gap-1.5 truncate pr-12">
+                        <div className="group flex flex-col justify-center px-2 py-1 h-full w-full relative">
+                          <div className="font-bold text-[13px] flex items-center gap-1.5 leading-snug">
                             <span className="truncate">{resource.patientName}</span>
-                            {isAi && <Sparkles className="w-3 h-3 ml-auto shrink-0 opacity-90 text-amber-500" />}
+                            {isAi && <Sparkles className="w-3.5 h-3.5 shrink-0 text-amber-500" />}
                           </div>
-                          <div className="text-[10px] truncate opacity-90 flex gap-1 items-center mt-0.5 pr-12">
-                            <span className="font-bold opacity-80 uppercase tracking-tight">{prio}</span>
-                            <span>•</span>
-                            <span>{resource.reason}</span>
+                          <div className="text-[11px] truncate opacity-75 mt-0.5 font-medium">
+                            {timeLabel}
                           </div>
-                          
-                          {/* Actions visible on hover */}
-                          {canBookAppointments && (
+                          {canManageAppointments && (
                             <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-white/90 backdrop-blur-sm p-0.5 rounded-md shadow-sm border border-slate-200" onClick={(e) => e.stopPropagation()}>
                                <button type="button" className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors" onClick={(e) => {
                                  e.stopPropagation();
@@ -1014,7 +1041,6 @@ export default function AppointmentsPage() {
                   }}
                   eventPropGetter={(event: any) => {
                     const prio = event.resource.priorityLevel || "Routine";
-                    const isAi = event.resource.isAiGenerated;
                     const isJustOptimized = event.resource.id === lastOptimizedId;
 
                     if (calendarView === "agenda") {
@@ -1106,7 +1132,7 @@ export default function AppointmentsPage() {
                         <span className={`font-bold ${diff.flag ? "text-emerald-700" : "text-slate-500"}`}>{(diff.ai_suggestion || diff.aiSuggestion) === "KEEP" ? (diff.staff_entry || diff.staffEntry) : (diff.ai_suggestion || diff.aiSuggestion)}</span>
                       </div>
                     </div>
-                    {diff.reasoning && (
+                    {diff.flag && diff.reasoning && (
                       <div className="text-[12px] text-slate-600 bg-slate-50/80 p-3 rounded-lg border border-slate-100 mt-1 leading-relaxed">
                         <p>{diff.reasoning}</p>
                       </div>
@@ -1182,7 +1208,7 @@ export default function AppointmentsPage() {
                 </div>
               </div>
               <div className="grid gap-2">
-                <Label>{lang === "ar" ? "مزود الرعاية الصحية" : "Healthcare Provider"}</Label>
+                <Label>{lang === "ar" ? "Ù…Ø²ÙˆØ¯ Ø§Ù„Ø±Ø¹Ø§ÙŠØ© Ø§Ù„ØµØ­ÙŠØ©" : "Healthcare Provider"}</Label>
                 <Select value={providerId} onValueChange={setProviderId}>
                   <SelectTrigger><SelectValue placeholder={tx("selectProvider", lang)} /></SelectTrigger>
                   <SelectContent>
@@ -1250,7 +1276,7 @@ export default function AppointmentsPage() {
               {tx("appointmentDetails", lang)}
             </DialogTitle>
             <DialogDescription className="text-slate-500 dark:text-slate-400">
-              {lang === "ar" ? "تفاصيل موعد المريض وتقارير جدولة الذكاء الاصطناعي." : "Patient appointment details and AI scheduling insights."}
+              {lang === "ar" ? "ØªÙ Ø§ØµÙŠÙ„ Ù…ÙˆØ¹Ø¯ Ø§Ù„Ù…Ø±ÙŠØ¶ ÙˆØªÙ‚Ø§Ø±ÙŠØ± Ø¬Ø¯ÙˆÙ„Ø© Ø§Ù„Ø°ÙƒØ§Ø¡ Ø§Ù„Ø§ØµØ·Ù†Ø§Ø¹ÙŠ." : "Patient appointment details and AI scheduling insights."}
             </DialogDescription>
           </DialogHeader>
 
@@ -1262,7 +1288,7 @@ export default function AppointmentsPage() {
                   <span className="font-semibold text-slate-900 dark:text-slate-100">{selectedAppointment.patientName}</span>
                 </div>
                 <div>
-                  <span className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">{lang === "ar" ? "مزود الرعاية" : "Provider"}</span>
+                  <span className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">{lang === "ar" ? "Ù…Ø²ÙˆØ¯ Ø§Ù„Ø±Ø¹Ø§ÙŠØ©" : "Provider"}</span>
                   <span className="font-semibold text-slate-900 dark:text-slate-100">{selectedAppointment.providerName || "Any"}</span>
                 </div>
                 <div className="mt-2">
@@ -1280,7 +1306,7 @@ export default function AppointmentsPage() {
                       </span>
                     ) : (
                       <span className="text-slate-600 dark:text-slate-400 font-semibold flex items-center gap-1">
-                        {lang === "ar" ? "يدوي" : "Manual Slot"}
+                        {lang === "ar" ? "ÙŠØ¯ÙˆÙŠ" : "Manual Slot"}
                       </span>
                     )}
                   </span>
@@ -1428,10 +1454,10 @@ export default function AppointmentsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle className="text-slate-800 dark:text-slate-100 flex items-center gap-2">
               <Trash2 className="w-5 h-5 text-rose-500" /> 
-              {lang === "ar" ? "تأكيد الحذف" : "Confirm Deletion"}
+              {lang === "ar" ? "ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø­Ø°Ù" : "Confirm Deletion"}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-slate-500 dark:text-slate-400">
-              {lang === "ar" ? "هل أنت متأكد من حذف هذا الموعد؟ لا يمكن التراجع عن هذا الإجراء." : "Are you sure you want to delete this appointment? This action cannot be undone."}
+              {lang === "ar" ? "Ù‡Ù„ Ø£Ù†Øª Ù…ØªØ£ÙƒØ¯ Ù…Ù† Ø­Ø°Ù Ù‡Ø°Ø§ Ø§Ù„Ù…ÙˆØ¹Ø¯ØŸ Ù„Ø§ ÙŠÙ…ÙƒÙ† Ø§Ù„ØªØ±Ø§Ø¬Ø¹ Ø¹Ù† Ù‡Ø°Ø§ Ø§Ù„Ø¥Ø¬Ø±Ø§Ø¡." : "Are you sure you want to delete this appointment? This action cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="mt-4">
@@ -1442,7 +1468,7 @@ export default function AppointmentsPage() {
                 if (deleteAppointmentId) deleteMutation.mutate(deleteAppointmentId);
               }}
             >
-              {lang === "ar" ? "حذف" : "Delete"}
+              {lang === "ar" ? "Ø­Ø°Ù" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

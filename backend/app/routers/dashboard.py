@@ -67,27 +67,16 @@ def summary(_user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
             Appointment.status.in_(["Confirmed", "Completed"])
         ).scalar() or 0
 
-        completion_rate = "100%"
-        if total_today > 0:
-            completion_rate = f"{int((attended_today / total_today) * 100)}%"
-
         # AI Optimized Schedules
-        total_slots = db.query(func.count(Appointment.id)).filter(
-            Appointment.provider_id == _user.id,
-            Appointment.status != "Cancelled"
-        ).scalar() or 0
         ai_slots = db.query(func.count(Appointment.id)).filter(
             Appointment.provider_id == _user.id,
             Appointment.is_ai_generated == True,
             Appointment.status != "Cancelled"
         ).scalar() or 0
-        ai_rate = "100%"
-        if total_slots > 0:
-            ai_rate = f"{int((ai_slots / total_slots) * 100)}%"
 
         stats = [
-            StatBlock(title="Completion Rate", value=completion_rate, description="Appointments completed"),
-            StatBlock(title="AI Optimized", value=ai_rate, description="Schedules optimized"),
+            StatBlock(title="Completed Today", value=str(attended_today), description="Appointments completed today"),
+            StatBlock(title="AI Optimized", value=str(ai_slots), description="AI-scheduled appointments"),
             StatBlock(title="Urgent Cases", value=str(urgent_cases), description="Needs immediate attention"),
             StatBlock(title="Patients Today", value=str(patients_today), description="Distinct scheduled patients")
         ]

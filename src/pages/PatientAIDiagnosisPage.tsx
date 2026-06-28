@@ -181,7 +181,7 @@ export function parseClinicalReport(report: string): ParsedClinicalReport {
       rationale = [sameLineText, ...rationaleLines]
         .filter(Boolean)
         .join(" ")
-        .replace(/^\s*[-•]\s*/, "")
+        .replace(/^\s*[-•:]\s*/, "")
         .trim();
     }
 
@@ -335,6 +335,25 @@ export function ClinicalReportView({
           </p>
         </div>
       )}
+
+      {/* Legend for AI Confidence Scores */}
+      <div className="bg-background border border-border/50 rounded-xl p-4 flex flex-col sm:flex-row gap-4 items-center justify-between text-xs shadow-sm mb-4">
+        <span className="font-black uppercase tracking-widest text-muted-foreground text-[10px]">Confidence Legend</span>
+        <div className="flex flex-wrap gap-4 items-center">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/20"></span>
+            <span className="font-bold text-foreground">High (80-100%)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-sm shadow-amber-500/20"></span>
+            <span className="font-bold text-foreground">Moderate (50-79%)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-sm shadow-red-500/20"></span>
+            <span className="font-bold text-foreground">Low (&lt;50%)</span>
+          </div>
+        </div>
+      </div>
 
       {report.suggestions.map((s) => (
         <div
@@ -559,10 +578,10 @@ export default function PatientAIDiagnosisPage() {
     queryFn: () => apiFetch<any[]>("/appointments"),
   });
 
-  const today = new Date().toISOString().split('T')[0];
+  const todayDate = new Date();
+  const today = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
   const activeAppointment = appointments.find(a => 
     a.patientId === Number(patientId) && 
-    (a.status === "Waiting" || a.status === "Scheduled") && 
     a.appointmentDate.startsWith(today)
   );
 
@@ -675,7 +694,8 @@ export default function PatientAIDiagnosisPage() {
 
       try {
          const appts = await apiFetch<any[]>("/appointments");
-         const today = new Date().toISOString().split('T')[0];
+         const todayDate = new Date();
+         const today = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
          const todaysAppt = appts.find(a => 
             a.patientId === Number(patientId) && 
             (a.status === "Waiting" || !a.status || a.status === "Scheduled") && 
@@ -690,7 +710,7 @@ export default function PatientAIDiagnosisPage() {
 
       navigate(`/patients/emr/${patientId}`);
     },
-    onError: () => toast.error("Failed to add diagnosis"),
+    onError: (error: any) => toast.error(error instanceof Error ? error.message : "Failed to add diagnosis"),
   });
 
   const handleApplyToPlan = (code: string, title: string, rationale: string) => {
@@ -762,72 +782,80 @@ export default function PatientAIDiagnosisPage() {
             </h4>
           </div>
           <div className="p-6 space-y-6">
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-3 block">
-                {tx("initialDiagnosisPrompt", lang)}
-              </label>
-              <textarea
-                value={diagnosisDetails}
-                onChange={(e) => setDiagnosisDetails(e.target.value)}
-                rows={4}
-                className="w-full text-sm p-4 bg-background/50 border border-border/50 rounded-xl outline-none focus:ring-2 ring-primary/10 text-foreground transition-all resize-none placeholder:italic placeholder:text-muted-foreground/50"
-                placeholder={tx("initialDiagnosisPlaceholder", lang)}
-              />
-              <p className="text-xs text-muted-foreground mt-2 font-medium">
-                Leave blank to auto-compile from EMR records.
-              </p>
-            </div>
-            <Button
-              className="w-full h-12 text-sm font-black uppercase tracking-widest bg-primary hover:bg-primary/90 text-white rounded-xl shadow-lg shadow-primary/20"
-              onClick={() => {
-                let context = `Patient Profile:\nName: ${patient.name}\nAge: ${patient.age} | Gender: ${patient.gender}\n`;
+            {!parsedReport ? (
+              <>
+                <div>
+                  <label className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-3 block">
+                    {tx("initialDiagnosisPrompt", lang)}
+                  </label>
+                  <textarea
+                    value={diagnosisDetails}
+                    onChange={(e) => setDiagnosisDetails(e.target.value)}
+                    rows={4}
+                    className="w-full text-sm p-4 bg-background/50 border border-border/50 rounded-xl outline-none focus:ring-2 ring-primary/10 text-foreground transition-all resize-none placeholder:italic placeholder:text-muted-foreground/50"
+                    placeholder={tx("initialDiagnosisPlaceholder", lang)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-2 font-medium">
+                    Leave blank to auto-compile from EMR records.
+                  </p>
+                </div>
+                <Button
+                  className="w-full h-12 text-sm font-black uppercase tracking-widest bg-primary hover:bg-primary/90 text-white rounded-xl shadow-lg shadow-primary/20"
+                  onClick={() => {
+                    let context = `Patient Profile:\nName: ${patient.name}\nAge: ${patient.age} | Gender: ${patient.gender}\n`;
 
-                if (patient.vitals) {
-                  context += `\nCurrent Vitals:\n- BP: ${patient.vitals.bp}\n- HR: ${patient.vitals.hr} bpm\n- SpO2: ${patient.vitals.spo2}%\n- Height/Weight: ${latestVitals?.height || "—"} / ${latestVitals?.weight || "—"}\n`;
-                }
+                    if (patient.vitals) {
+                      context += `\nCurrent Vitals:\n- BP: ${patient.vitals.bp}\n- HR: ${patient.vitals.hr} bpm\n- SpO2: ${patient.vitals.spo2}%\n- Height/Weight: ${latestVitals?.height || "—"} / ${latestVitals?.weight || "—"}\n`;
+                    }
 
-                if (patient.allergies && patient.allergies.length > 0) {
-                  context += `\nAllergies: ${patient.allergies.join(", ")}\n`;
-                }
+                    if (patient.allergies && patient.allergies.length > 0) {
+                      context += `\nAllergies: ${patient.allergies.join(", ")}\n`;
+                    }
 
-                if (patient.chronicConditions && patient.chronicConditions.length > 0) {
-                  context += `\nChronic Conditions: ${patient.chronicConditions.join(", ")}\n`;
-                }
+                    if (patient.chronicConditions && patient.chronicConditions.length > 0) {
+                      context += `\nChronic Conditions: ${patient.chronicConditions.join(", ")}\n`;
+                    }
 
-                if (data?.sections && data.sections.length > 0) {
-                  const history = data.sections
-                    .filter((s) =>
-                      ["Past Medical/Surgical History", "Chief Complaints", "Present Illness"].includes(s.key)
-                    )
-                    .map((s) => `${s.key}: ${s.content}`);
-                  if (history.length > 0) {
-                    context += `\nEMR History:\n${history.join("\n")}\n`;
-                  }
-                }
+                    if (data?.sections && data.sections.length > 0) {
+                      const history = data.sections
+                        .filter((s) =>
+                          ["Past Medical/Surgical History", "Chief Complaints", "Present Illness"].includes(s.key)
+                        )
+                        .map((s) => `${s.key}: ${s.content}`);
+                      if (history.length > 0) {
+                        context += `\nEMR History:\n${history.join("\n")}\n`;
+                      }
+                    }
 
-                const finalPayload = diagnosisDetails.trim()
-                  ? `${context}\nDoctor's Initial Notes/Diagnosis Details:\n${diagnosisDetails}`
-                  : context;
+                    const finalPayload = diagnosisDetails.trim()
+                      ? `${context}\nDoctor's Initial Notes/Diagnosis Details:\n${diagnosisDetails}`
+                      : context;
 
-                diagnosisMutation.mutate(finalPayload);
-              }}
-              disabled={diagnosisMutation.isPending || !activeAppointment}
-            >
-              {diagnosisMutation.isPending ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                  {tx("generatingSuggestions", lang)}
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-5 h-5 mr-2" />
-                  {tx("generateSuggestions", lang)}
-                </>
-              )}
-            </Button>
-
-            {parsedReport && (
-              <div className="mt-8 animate-in slide-in-from-bottom-4 duration-500 fade-in fill-mode-both">
+                    diagnosisMutation.mutate(finalPayload);
+                  }}
+                  disabled={diagnosisMutation.isPending || !activeAppointment}
+                >
+                  {diagnosisMutation.isPending ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                      {tx("generatingSuggestions", lang)}
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5 mr-2" />
+                      {tx("generateSuggestions", lang)}
+                    </>
+                  )}
+                </Button>
+              </>
+            ) : (
+              <div className="animate-in slide-in-from-bottom-4 duration-500 fade-in fill-mode-both">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-sm font-bold uppercase text-primary">Diagnostic Analysis Complete</h3>
+                  <Button variant="outline" size="sm" onClick={() => { setParsedReport(null); setDiagnosisResult(null); }} className="h-8 text-xs font-bold text-muted-foreground">
+                    Start Over
+                  </Button>
+                </div>
                 <ClinicalReportView
                   report={parsedReport}
                   onApply={handleApplyToPlan}

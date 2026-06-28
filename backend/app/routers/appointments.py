@@ -17,7 +17,7 @@ router = APIRouter(prefix="/appointments", tags=["Appointments"])
 # Conflict detection uses half this value on each side of the requested time.
 SLOT_DURATION_MIN: int = 30
 
-@router.get("/", response_model=List[AppointmentOut])
+@router.get("", response_model=List[AppointmentOut])
 def get_appointments(
     _user: CurrentUser,
     db: Annotated[Session, Depends(get_db)],
@@ -88,7 +88,7 @@ def update_appointment_status(appointment_id: int, req: AppointmentStatusUpdate,
         provider_name=prov.full_name if prov else "Unknown"
     )
 
-@router.post("/", response_model=AppointmentOut)
+@router.post("", response_model=AppointmentOut)
 def register_appointment(appt_in: AppointmentCreate, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
     pat = db.get(Patient, appt_in.patient_id)
     if not pat:
@@ -189,14 +189,24 @@ def update_appointment(appointment_id: int, req: AppointmentCreate, _user: Curre
 
 @router.delete("/{appointment_id}")
 def delete_appointment(appointment_id: int, _user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
+    print(f"[DEBUG] Attempting to delete appointment with ID: {appointment_id}")
     db_appt = db.get(Appointment, appointment_id)
     if not db_appt:
+        print(f"[DEBUG] Appointment {appointment_id} NOT FOUND!")
         raise HTTPException(status_code=404, detail="Appointment not found")
         
-    db_appt.status = "Cancelled"
-    db.commit()
-    db.refresh(db_appt)
-    return {"message": "Appointment cancelled successfully"}
+    is_ai = getattr(db_appt, 'is_ai_generated', False)
+    print(f"[DEBUG] Found appointment {appointment_id}, is_ai_generated: {is_ai}")
+    try:
+        db.delete(db_appt)
+        db.commit()
+        print(f"[DEBUG] Appointment {appointment_id} successfully deleted from DB!")
+    except Exception as e:
+        print(f"[DEBUG] Exception during delete: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Could not delete appointment")
+        
+    return {"message": "Appointment deleted successfully"}
 
 @router.delete("/cleanup")
 def cleanup_invalid_appointments(db: Session = Depends(get_db)):
@@ -232,7 +242,7 @@ def cleanup_invalid_appointments(db: Session = Depends(get_db)):
     return {"message": f"Successfully deleted {deleted_count} invalid or past appointments."}
 
 
-from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, ConfigDict, Field
@@ -296,73 +306,125 @@ def get_medical_data(state: AgentState):
         return {"medical_history": medical_history}
 
 def suggest_slot(state: AgentState):
-    # LLM and Structured Output
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2)
-    structured_llm = llm.with_structured_output(AIAgentResponseLLM)
-        
+    import requests as http_requests
+    import json as json_lib
+    
+    # Use direct HTTP call to Gemini REST API (langchain library doesn't support new AQ. key format)
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    
     prompt = f"""
 ROLE
 You are the Scheduling Clinical Supervisor, an AI assist layer inside a Primary Healthcare Centre scheduling tool. 
-A staff member (usually a nurse) fills in an appointment form; you review their entry and suggest optimizations that appear in an "AI Optimization Review" dialog with plain, nurse-readable explanations.
-You never book, change, or finalize anything. The nurse always makes the final call.
+A staff member (who is filling the form) has selected an appointment slot. You review their entry and suggest optimizations.
+You never book, change, or finalize anything. The staff member makes the final call.
 
-OPERATING PRINCIPLES (override everything below if in conflict)
-1. Escalate freely, never silently downgrade. You may raise urgency or flag a concern; you may never lower a priority the nurse selected. The most you do when you see LESS urgency than the nurse is add an informational note.
-2. Absence of signal is not reassurance. An empty reason field, missing vitals, or no matching keywords does NOT mean "Routine" or "safe" — it means "insufficient information," which is itself a flag to confirm.
-3. Trust ranking of inputs: measured vitals > EMR risk context > reason-text. Objective data outranks parsed free text.
-4. You assist, you don't decide. Every suggestion is a recommendation the nurse can accept or reject.
-5. Audit everything. Output is logged with the nurse's accept/reject. Use only the minimum EMR fields the decision requires.
-6. You are not a diagnostic tool and not a substitute for clinical judgment.
-7. CRITICAL: DO NOT HALLUCINATE OR INVENT VITALS. If a temperature, BP, or other vital is not explicitly provided in the INPUTS, do not make one up. If the EMR mentions "fever" but no temperature is given, say "history of fever", NOT a specific degree.
+OPERATING PRINCIPLES
+1. Escalate freely, never silently downgrade. You may raise urgency or flag a concern; you may never lower a priority. 
+2. Trust ranking of inputs: measured vitals > EMR risk context > reason-text.
+3. You assist, you don't decide. Every suggestion is a recommendation.
+4. CRITICAL: Priority MUST be exactly one of: "Routine", "Soon", or "Urgent". NEVER use "Emergency" or anything else for priority. If it's an emergency, set priority to "Urgent" and emergency_route to true.
+5. DO NOT HALLUCINATE OR INVENT VITALS. If not explicitly provided, do not make them up.
 
 INPUTS
 - visit_type: {state.staff_entry.get('Visit Type', 'Unknown')}
 - reason_text: {state.staff_entry.get('Reason', '')}
-- nurse_selected_priority: {state.staff_entry.get('Priority', 'Routine')}
-- nurse_selected_provider: {state.staff_entry.get('Doctor', 'Any Provider')}
+- user_selected_priority: {state.staff_entry.get('Priority', 'Routine')}
+- user_selected_provider: {state.staff_entry.get('Doctor', 'Any Provider')}
 - requested_datetime: {state.staff_entry.get('Date', '')} {state.staff_entry.get('Time', '')}
 - vitals and emr: {state.medical_history}
 - available_doctors: {state.staff_entry.get('available_doctors', 'Unknown')}
 
 PRIORITY TIERS & SLA
-- Urgent  -> see within 4 hours (Phase1)
-- Soon    -> see within 48 hours (Phase2)
-- Routine -> standard scheduling (Phase3)
-Thresholds for vitals MUST come from the centre's adopted early-warning instrument (e.g. NEWS2). Do not invent thresholds. Apply age-appropriate ranges.
-
-STEP 0 - VISIT-TYPE CONTEXT
-- New Visit: No EMR history. Assign by availability + clinical fit. Gather baseline.
-- Walk In: Vitals present -> vitals are primary signal. Run full emergency screen.
-- Follow Up: Drive on "change since last visit". Continuity targets the doctor who handled related prior episode (or GP). Treat "not improving" as escalation.
-- ER Visit: ACUITY CATEGORY, NOT A BOOKING. Branch straight to emergency pathway.
-- Maternity: Obstetric ruleset. Provider resolves to OB/midwife, never GP.
+- Urgent  -> see within 4 hours
+- Soon    -> see within 48 hours
+- Routine -> standard scheduling
+CRITICAL: You are restricted to ONLY "Routine", "Soon", or "Urgent" for final_priority.
 
 STEP 1 - EMERGENCY SCREEN
-Before negation, scrub negated terms. Red flags come from Vitals (critical thresholds) AND Reason text (chest pain, FAST signs, severe breathing, major bleeding/trauma, unresponsive).
-If red flag present: STOP scheduling. Set emergency_route = true. Output emergency action and exit.
+If there are red flags (chest pain, FAST signs, severe breathing, major bleeding/trauma, unconscious): Set emergency_route = true. Set final_priority = "Urgent".
 
-STEP 2 - URGENCY CLASSIFICATION (non-emergency)
-Compute ai_suggested_priority: Vitals (sub-critical -> Soon/Urgent), EMR risk modifier (bump borderline UP), Reason text. Take HIGHEST.
+STEP 2 - URGENCY CLASSIFICATION
+Compute ai_suggested_priority: Vitals, EMR risk modifier, Reason text. Take HIGHEST.
 
-STEP 3 - RECONCILE WITH NURSE
-final_priority = max(nurse_selected_priority, ai_suggested_priority)
-- ai > nurse -> final = ai; FLAG(escalation, severity=high), recommend upgrade.
-- ai < nurse -> final = nurse; keep it; optional note.
-- ai = nurse -> keep; no flag.
+STEP 3 - RECONCILE PRIORITY
+Compare user_selected_priority with ai_suggested_priority. 
+If AI suggests higher urgency: set final_priority = AI suggestion, set priority_action = "ESCALATE", and FLAG(escalation, severity=high) with a clear explanation.
+If AI suggests equal or lower urgency: set final_priority = user_selected_priority, set priority_action = "KEEP". Do NOT flag an escalation.
 
 STEP 4 - DOCTOR ASSIGNMENT
-candidates = doctors clinically appropriate from available_doctors
-If the patient has an acute or urgent condition (e.g. asthma attack, severe pain) and nurse_selected_provider is a Nurse, you MUST reassign them to a Doctor. FLAG(slot_or_fit_conflict, severity=medium), provider_action=REASSIGN, and set recommended_provider to an appropriate doctor.
-If nurse_selected_provider is a Doctor and is appropriate, keep it.
-Elif registered GP is in candidates, assign that doctor.
-Else assign earliest appropriate doctor; FLAG(continuity_overridden, severity=low).
+candidates = doctors from available_doctors
+CRITICAL RULE: Look at user_selected_provider. If the role in the string says "Nurse", and this is an "ER Visit" or "Urgent" priority or reason_text contains severe/emergency keywords:
+Then you MUST set provider_action="REASSIGN", set recommended_provider to the EXACT name of a DOCTOR from available_doctors (do not invent a role like "Emergency Department Physician", use an exact name from the list), and FLAG(slot_or_fit_conflict, severity=high) explaining that a Nurse cannot independently manage an emergent case.
+HOWEVER, if user_selected_provider already has the role "Doctor", YOU MUST KEEP IT (provider_action="KEEP", recommended_provider=user_selected_provider) unless they are strictly incompatible. Do not claim a Doctor is a Nurse.
 
-STEP 5 - FLAG AGGREGATION & OUTPUT
-Weight flags by severity. If zero flags, confirm with "no issues detected. You've selected {state.staff_entry.get('Doctor')} for this appointment. This is optimal based on doctor availability and suitability for the patient case."
-Explanations must be readable by a nurse with no AI background.
+STEP 5 - OUTPUT
+Generate your JSON based exactly on these instructions. Explain flags in plain English.
 """
-    response = structured_llm.invoke([HumanMessage(content=prompt)])
-    final_review = response.model_dump()
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "visit_type": {"type": "STRING"},
+            "emergency_route": {"type": "BOOLEAN"},
+            "final_priority": {
+                "type": "STRING", 
+                "enum": ["Routine", "Soon", "Urgent"]
+            },
+            "priority_action": {"type": "STRING", "enum": ["KEEP", "ESCALATE", "CONFIRM"]},
+            "recommended_provider": {"type": "STRING"},
+            "provider_action": {"type": "STRING", "enum": ["KEEP", "REASSIGN", "CONFLICT"]},
+            "flags": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "type": {"type": "STRING"},
+                        "severity": {"type": "STRING"},
+                        "current": {"type": "STRING", "nullable": True},
+                        "suggested": {"type": "STRING", "nullable": True},
+                        "explanation": {"type": "STRING"}
+                    },
+                    "required": ["type", "severity", "explanation"]
+                }
+            },
+            "nurse_summary": {"type": "STRING", "nullable": True}
+        },
+        "required": ["emergency_route", "flags", "final_priority"]
+    }
+    
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": schema,
+            "temperature": 0.2
+        }
+    }
+    
+    headers = {
+        "x-goog-api-key": gemini_key,
+        "Content-Type": "application/json"
+    }
+    
+    import time
+    for attempt in range(3):
+        try:
+            resp = http_requests.post(GEMINI_URL, headers=headers, json=body, timeout=60)
+            if resp.status_code == 200:
+                break
+            elif resp.status_code == 503 and attempt < 2:
+                time.sleep(1)
+            else:
+                raise Exception(f"Gemini API Error: {resp.text}")
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(1)
+            else:
+                raise Exception(f"Gemini API Request failed: {str(e)}")
+        
+    response_data = resp.json()
+    text_content = response_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
+    final_review = json_lib.loads(text_content)
     
     return {"final_review": final_review}
 
@@ -411,10 +473,24 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
         ai_response = result.get("final_review", {})
     except Exception as e:
         print(f"LLM Error: {e}")
+        with open("appointment_llm_error.txt", "w") as f:
+            f.write(f"LLM Error: {str(e)}")
         # --- Fallback Simulated Logic (if API key is invalid/unauthorized) ---
         reason_lower = req.reason.lower() if req.reason else ""
-        is_urgent_reason = any(kw in reason_lower for kw in ["fever", "chest pain", "breathing", "emergency", "severe", "trauma", "bleeding", "stroke"])
+        is_urgent_reason = any(kw in reason_lower for kw in [
+            "fever", "chest pain", "breathing", "emergency", "emergent", "urgent",
+            "severe", "trauma", "bleeding", "stroke", "cardiac", "heart attack",
+            "unconscious", "faint", "accident", "critical", "er visit", "er"
+        ])
         is_soon_reason = any(kw in reason_lower for kw in ["infection", "pain", "vomiting", "fracture", "swelling", "cough"])
+        
+        # Also treat as urgent if priority level is already set to Urgent by the staff
+        if req.priority_level and req.priority_level.lower() in ["urgent", "emergency"]:
+            is_urgent_reason = True
+        
+        # Also treat as urgent if visit type is ER Visit
+        if req.visit_type and "er" in req.visit_type.lower():
+            is_urgent_reason = True
         
         # Check vitals from medical history for fever
         has_fever = "39.5" in state.medical_history or "fever" in state.medical_history.lower() or "temperature_c" in state.medical_history
@@ -447,12 +523,26 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             priority_flag = False
             priority_reasoning = "The priority matches clinical guidelines."
 
-        doctor_flag = prov_name == "Unknown" or not req.provider_id
-        suggested_doctor = "Dr. Khalid Al-Rashid" if doctor_flag else "KEEP"
-        doctor_reasoning = (
-            "Consider assigning the patient's registered GP for better continuity of care." 
-            if doctor_flag else f"You've selected {prov_name} ({prov_specialty}) for this appointment. This is optimal based on doctor availability and suitability for the patient case."
-        )
+        is_nurse = "nurse" in prov_role.lower() if prov_role else False
+        
+        # Find the best available doctor to suggest
+        best_doctor = next((d.full_name for d in active_doctors if d.role == 'Doctor'), "Dr. Khalid Al-Rashid")
+        
+        if is_urgent_reason and is_nurse:
+            doctor_flag = True
+            suggested_doctor = best_doctor
+            doctor_reasoning = (
+                f"{prov_name} is a Nurse and is not qualified to handle this case independently. "
+                f"This appointment is marked as Urgent (ER Visit / Emergency) and requires a licensed physician. "
+                f"I strongly recommend reassigning to {best_doctor} who is available and qualified for this case."
+            )
+        else:
+            doctor_flag = prov_name == "Unknown" or not req.provider_id
+            suggested_doctor = best_doctor if doctor_flag else "KEEP"
+            doctor_reasoning = (
+                "Consider assigning the patient's registered GP for better continuity of care." 
+                if doctor_flag else f"You've selected {prov_name} ({prov_specialty}) for this appointment. This is optimal based on doctor availability and suitability for the patient case."
+            )
 
         diffs_out = [
             {
@@ -474,14 +564,14 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                 "staff_entry": req.appointment_date or "Not Specified",
                 "ai_suggestion": "KEEP",
                 "flag": False,
-                "reasoning": "The selected date is optimal. It falls within standard PHC operating hours (8:00 AM to 5:00 PM) and has confirmed availability with no scheduling conflicts."
+                "reasoning": "The selected date is optimal. There's no current conflicts."
             },
             {
                 "field": "Time",
                 "staff_entry": req.time_str or "Not Specified",
                 "ai_suggestion": "KEEP",
                 "flag": False,
-                "reasoning": "The selected time slot is optimal. It falls within standard PHC operating hours (8:00 AM to 5:00 PM) and has confirmed availability with no scheduling conflicts."
+                "reasoning": "The selected time slot is optimal and has confirmed availability with no current conflicts."
             }
         ]
         
@@ -496,12 +586,28 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
     def get_reasoning(flag_types):
         for f in flags:
             if f.get("type") in flag_types:
-                return f.get("explanation")
+                expl = f.get("explanation", "").strip()
+                if expl:
+                    return expl
         return None
+
+    def get_any_flag_reasoning():
+        """Fall back to the first non-empty flag explanation, then nurse_summary."""
+        for f in flags:
+            expl = f.get("explanation", "").strip()
+            if expl:
+                return expl
+        return (ai_response.get("nurse_summary") or "").strip() or None
         
     priority_flag = ai_response.get("priority_action") not in ["KEEP", None, ""]
+    if ai_response.get("final_priority") == req.priority_level:
+        priority_flag = False
+        
     doctor_flag = ai_response.get("provider_action") not in ["KEEP", None, ""]
     suggested_provider_name = ai_response.get("recommended_provider") if doctor_flag else prov_name
+    
+    if suggested_provider_name == prov_name:
+        doctor_flag = False
     
     # Conflict checking logic
     target_prov_id = req.provider_id
@@ -516,19 +622,27 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
     suggested_time = "KEEP"
     date_flag = False
     time_flag = False
-    date_reasoning = "The selected date is optimal. It falls within standard PHC operating hours."
-    time_reasoning = "The selected time slot is optimal and has confirmed availability with no scheduling conflicts."
+    date_reasoning = "The selected date is optimal. There's no current conflicts."
+    time_reasoning = "The selected time slot is optimal and has confirmed availability with no current conflicts."
     manual_slots_affected = None
     
-    if target_prov_id and req.appointment_date and req.time_str:
+    if target_prov_id and (req.utc_datetime or (req.appointment_date and req.time_str)):
         try:
-            from datetime import datetime, timedelta
-            req_dt = datetime.strptime(f"{req.appointment_date} {req.time_str}", "%Y-%m-%d %H:%M")
+            from datetime import datetime, timedelta, timezone
+            
+            if hasattr(req, "utc_datetime") and req.utc_datetime:
+                iso_str = req.utc_datetime.replace('Z', '+00:00')
+                req_dt = datetime.fromisoformat(iso_str)
+            else:
+                req_dt = datetime.strptime(f"{req.appointment_date} {req.time_str}", "%Y-%m-%d %H:%M")
+                local_tz = datetime.now().astimezone().tzinfo
+                req_dt = req_dt.replace(tzinfo=local_tz)
             
             temp_date = req_dt
             attempts = 0
             conflict_found = False
-            
+            first_conflict_appt = None
+
             while attempts < 20:
                 half = SLOT_DURATION_MIN - 1
                 start_win = temp_date - timedelta(minutes=half)
@@ -537,24 +651,39 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                     Appointment.provider_id == target_prov_id,
                     Appointment.appointment_date >= start_win,
                     Appointment.appointment_date <= end_win,
-                    Appointment.status == "Scheduled"
+                    Appointment.status.in_(["Scheduled", "Confirmed", "Booked", "Completed"])
                 ).all()
-                
+
                 if not conflicts:
                     break
-                    
+
                 conflict_found = True
+                if first_conflict_appt is None:
+                    first_conflict_appt = conflicts[0]
                 temp_date += timedelta(minutes=SLOT_DURATION_MIN)
                 attempts += 1
-                
+
             if conflict_found:
+                local_tz = datetime.now().astimezone().tzinfo
+                local_temp = temp_date.astimezone(local_tz) if temp_date.tzinfo else temp_date
+                local_req = req_dt.astimezone(local_tz) if req_dt.tzinfo else req_dt
+
+                # Build a human-readable description of the blocking appointment
+                if first_conflict_appt:
+                    c_pat = db.get(Patient, first_conflict_appt.patient_id)
+                    c_pat_name = f"{c_pat.first_name} {c_pat.family_name}" if c_pat else "another patient"
+                    c_time = first_conflict_appt.appointment_date.astimezone(local_tz).strftime("%H:%M")
+                    conflict_desc = f"{c_pat_name} at {c_time}"
+                else:
+                    conflict_desc = "another patient"
+
                 time_flag = True
-                suggested_time = temp_date.strftime("%H:%M")
-                if temp_date.date() != req_dt.date():
+                suggested_time = local_temp.strftime("%H:%M")
+                if local_temp.date() != local_req.date():
                     date_flag = True
-                    suggested_date = temp_date.strftime("%Y-%m-%d")
+                    suggested_date = local_temp.strftime("%Y-%m-%d")
                     date_reasoning = "Shifted to the next available day due to schedule conflicts."
-                time_reasoning = "Conflict detected with an existing appointment. Shifted to the next available slot to prevent double-booking."
+                time_reasoning = f"Conflict with {conflict_desc}'s appointment at this slot. Shifted to {local_temp.strftime('%H:%M')} — the next available slot to prevent double-booking."
                 manual_slots_affected = f"Bypassed {attempts} conflicting slot(s) to find availability."
         except Exception as e:
             print(f"Time parse error: {e}")
@@ -565,14 +694,14 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             "staff_entry": req.priority_level or "Routine",
             "ai_suggestion": ai_response.get("final_priority") if priority_flag else "KEEP",
             "flag": priority_flag,
-            "reasoning": get_reasoning(["escalation", "confirm_info"]) or ("Priority needs review." if priority_flag else "The priority matches clinical guidelines.")
+            "reasoning": get_reasoning(["escalation", "confirm_info", "emergency"]) or get_any_flag_reasoning() or ("Priority needs review." if priority_flag else "The priority matches clinical guidelines.")
         },
         {
             "field": "Doctor",
             "staff_entry": prov_name,
             "ai_suggestion": suggested_provider_name if doctor_flag else "KEEP",
             "flag": doctor_flag,
-            "reasoning": get_reasoning(["slot_or_fit_conflict", "continuity_overridden"]) or ("Consider assigning the recommended provider." if doctor_flag else f"You've selected {prov_name} ({prov_specialty}) for this appointment. This is optimal based on doctor availability and suitability for the patient case.")
+            "reasoning": get_reasoning(["slot_or_fit_conflict", "continuity_overridden"]) or (get_any_flag_reasoning() if doctor_flag else None) or ("The nurse isn't suitable for an emergent case. Consider assigning the recommended provider." if doctor_flag else f"You've selected {prov_name} ({prov_specialty}) for this appointment. This is optimal based on doctor availability and suitability for the patient case.")
         },
         {
             "field": "Date",
@@ -595,9 +724,20 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
         ai_exp += f" ({manual_slots_affected})"
 
     # Log AI optimization action
+    changes_flagged = sum(1 for d in diffs_out if d.get("flag"))
+    pat_name = f"{pat.first_name} {pat.family_name}"
+    appt_date = req.appointment_date or "Unknown date"
+    orig_priority = req.priority_level or "Routine"
+    final_priority = ai_response.get("final_priority") or orig_priority
+    priority_str = f"{orig_priority} → {final_priority}" if priority_flag else orig_priority
+    log_action = (
+        f"AI Optimization — {changes_flagged} change(s) suggested | Priority: {priority_str} | Provider: {prov_name} | Date: {appt_date}"
+        if changes_flagged else
+        f"AI Optimization — No changes needed | Priority: {orig_priority} | Provider: {prov_name} | Date: {appt_date}"
+    )
     db.add(ActivityLog(
-        action="AI Appointment Optimization reviewed",
-        patient_name=f"Patient #{req.patient_id}",
+        action=log_action,
+        patient_name=pat_name,
         provider_name=f"{_user.full_name} ({_user.role})"
     ))
     db.commit()
@@ -741,6 +881,29 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, _user: CurrentUser
             date_obj = date_obj.replace(hour=hour, minute=minute, second=0, microsecond=0)
         except:
             date_obj = date_obj.replace(hour=10, minute=0, second=0, microsecond=0)
+
+        # Conflict check and slot shifting logic
+        if prov:
+            attempts = 0
+            while attempts < 20:
+                half = SLOT_DURATION_MIN - 1
+                start_win = date_obj - timedelta(minutes=half)
+                end_win = date_obj + timedelta(minutes=half)
+                
+                # Check DB for conflicts
+                conflicts = db.query(Appointment).filter(
+                    Appointment.provider_id == prov.id,
+                    Appointment.appointment_date >= start_win,
+                    Appointment.appointment_date <= end_win,
+                    Appointment.status.in_(["Scheduled", "Confirmed", "Booked", "Completed"])
+                ).all()
+                
+                if not conflicts:
+                    break
+                    
+                # Shift forward by SLOT_DURATION_MIN
+                date_obj += timedelta(minutes=SLOT_DURATION_MIN)
+                attempts += 1
 
         prov_name = prov.full_name if prov else "Any"
         optimization_diffs_data = [

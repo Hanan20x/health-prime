@@ -23,14 +23,14 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     <div className="flex min-h-screen w-full" dir={lang === "ar" ? "rtl" : "ltr"}>
       {isSidebarOpen && <AppSidebar />}
       <div className="flex-1 flex flex-col min-w-0">
-        <AppHeader 
-          userName={me?.fullName} 
-          userRole={me?.role} 
-          avatarUrl={me?.avatarUrl} 
+        <AppHeader
+          userName={me?.fullName}
+          userRole={me?.role}
+          avatarUrl={me?.avatarUrl}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
           isSidebarOpen={isSidebarOpen}
         />
-        <main className="flex-1 p-6 overflow-auto">{children}</main>
+        <main className="flex-1 p-6">{children}</main>
       </div>
     </div>
   );

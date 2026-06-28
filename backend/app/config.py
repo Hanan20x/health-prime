@@ -12,5 +12,12 @@ class Settings(BaseSettings):
     who_icd_client_id: str = ""
     who_icd_client_secret: str = ""
 
+    # SMTP settings for OTP emails
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "HealthPrime <noreply@healthprime.sa>"
+
 
 settings = Settings()

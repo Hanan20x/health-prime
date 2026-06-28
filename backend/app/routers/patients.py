@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -179,15 +179,22 @@ def create_diagnosis(patient_id: int, body: DiagnosisCreate, user: CurrentUser, 
     p = db.query(Patient).filter(Patient.id == patient_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Patient not found")
-        
+
     active_appt = db.query(Appointment).filter(
         Appointment.patient_id == patient_id,
-        func.date(Appointment.appointment_time) == date.today(),
-        Appointment.status.in_(["Scheduled", "Waiting"])
+        func.date(Appointment.appointment_date) == date.today(),
+        Appointment.status.notin_(["Cancelled", "Completed"])
     ).first()
-    
-    if not active_appt:
-        raise HTTPException(status_code=400, detail="Patient must have an active appointment today (Scheduled or Waiting) to receive a diagnosis.")
+
+    # Prevent duplicate active diagnoses
+    existing_diag = db.query(PatientDiagnosis).filter(
+        PatientDiagnosis.patient_id == patient_id,
+        PatientDiagnosis.icd_code == body.icd_code,
+        PatientDiagnosis.status == "Active"
+    ).first()
+
+    if existing_diag and body.status == "Active":
+        raise HTTPException(status_code=400, detail="This patient already has an active diagnosis with this ICD code.")
 
     d = PatientDiagnosis(
         patient_id=patient_id,
@@ -195,17 +202,52 @@ def create_diagnosis(patient_id: int, body: DiagnosisCreate, user: CurrentUser, 
         icd_title=body.icd_title,
         notes=body.notes,
         is_ai_generated=body.is_ai_generated,
-        status=body.status
+        status=body.status,
+        diagnosed_at=datetime.now(timezone.utc)
     )
     db.add(d)
     db.commit()
     db.refresh(d)
-    action_text = "AI Diagnosis generated" if body.is_ai_generated else "Diagnosis added"
-    _log_activity(db, action_text, patient_full_name(p), f"{body.icd_code} · {active_appt.status}")
+    
+    action_text = f"AI Diagnosis ({body.icd_code})" if body.is_ai_generated else f"Diagnosis ({body.icd_code})"
+    _log_activity(db, action_text, patient_full_name(p), user.full_name)
     db.commit()
     
-    # Also update appointment status to Completed
-    active_appt.status = "Completed"
-    db.commit()
-    
+    if active_appt:
+        active_appt.status = "Completed"
+        db.commit()
+
     return d
+
+
+@router.patch("/{patient_id}/diagnoses/{diagnosis_id}", response_model=DiagnosisOut)
+def update_diagnosis(patient_id: int, diagnosis_id: int, body: dict, user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
+    d = db.query(PatientDiagnosis).filter(
+        PatientDiagnosis.id == diagnosis_id,
+        PatientDiagnosis.patient_id == patient_id
+    ).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Diagnosis not found")
+    if "status" in body:
+        d.status = body["status"]
+    if "notes" in body:
+        d.notes = body["notes"]
+    if "icd_code" in body and body["icd_code"]:
+        d.icd_code = body["icd_code"]
+    if "icd_title" in body and body["icd_title"]:
+        d.icd_title = body["icd_title"]
+    db.commit()
+    db.refresh(d)
+    return d
+
+
+@router.delete("/{patient_id}/diagnoses/{diagnosis_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_diagnosis(patient_id: int, diagnosis_id: int, user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
+    d = db.query(PatientDiagnosis).filter(
+        PatientDiagnosis.id == diagnosis_id,
+        PatientDiagnosis.patient_id == patient_id
+    ).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Diagnosis not found")
+    db.delete(d)
+    db.commit()

@@ -37,17 +37,21 @@ import type { PatientListItem, PatientVitalsContext, VitalOut, VitalsChartBundle
 import { cn } from "@/lib/utils";
 import { useLang } from "@/hooks/useLang";
 import { tx } from "@/lib/i18n";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function VitalsRecordPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { lang, isArabic } = useLang();
+  const { isDoctor } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const patientIdParam = searchParams.get("patientId");
   const viewParam = searchParams.get("view") as "entry" | "table" | "trends" | null;
   const patientId = patientIdParam ? Number(patientIdParam) : 0;
 
-  const [activeView, setActiveView] = useState<"entry" | "table" | "trends">(viewParam || "entry");
+  // Doctors can only view charts, not record vitals
+  const defaultView = isDoctor ? "trends" : "entry";
+  const [activeView, setActiveView] = useState<"entry" | "table" | "trends">(viewParam || defaultView);
   const [activePanel, setActivePanel] = useState("general");
   
   // States
@@ -130,7 +134,7 @@ export default function VitalsRecordPage() {
         diastolic_bp: dia ? Number(dia) : null,
         weight_kg: weight ? Number(weight) : null,
         height_cm: height ? Number(height) : null,
-        bmi: Number(bmi),
+        bmi: isNaN(Number(bmi)) ? null : Number(bmi),
         notes: complaints.trim() || null,
       };
       return apiFetch("/vitals", { method: "POST", body: JSON.stringify(body) });
@@ -152,7 +156,8 @@ export default function VitalsRecordPage() {
       // Auto-transition appointment to Waiting
       try {
          const appts = await apiFetch<any[]>("/appointments");
-         const today = new Date().toISOString().split('T')[0];
+         const todayDate = new Date();
+         const today = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
          const todaysAppt = appts.find(a => 
             a.patientId === patientId && 
             (!a.status || a.status === "Scheduled") && 
@@ -506,10 +511,10 @@ export default function VitalsRecordPage() {
 
           <nav className="flex items-center gap-1 bg-slate-50/50 p-1 rounded-xl border border-slate-100 shadow-inner">
              {[
-               { id: "entry", label: tx("assessment", lang), icon: ClipboardCheck },
+               !isDoctor ? { id: "entry", label: tx("assessment", lang), icon: ClipboardCheck } : null,
                { id: "table", label: tx("history", lang), icon: Search },
                { id: "trends", label: tx("analytics", lang), icon: BarChart3 }
-             ].map(tab => (
+             ].filter(Boolean).map(tab => (
                <button
                  key={tab.id}
                  onClick={() => setActiveView(tab.id as any)}

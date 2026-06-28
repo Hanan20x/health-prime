@@ -5,8 +5,9 @@
 }
 
 .rbc-event {
-  padding: 2px 5px !important;
-  font-size: 11px !important;
+  padding: 4px 8px !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
   transition: all 0.2s ease;
   box-shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
@@ -16,8 +17,21 @@
   box-shadow: 0 4px 6px rgba(0,0,0,0.08);
 }
 
+.rbc-event-label {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  opacity: 0.8;
+  margin-bottom: 2px !important;
+}
+
+.rbc-event-content {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+
 .rbc-today {
-  background-color: rgba(20, 184, 166, 0.04) !important;
+  background-color: transparent !important;
+  border-top: 2px solid #14b8a6 !important;
 }
 
 .rbc-off-range-bg {
@@ -42,6 +56,7 @@
 
 .rbc-month-row {
   border-bottom: 1px solid #f1f5f9 !important;
+  min-height: 140px !important;
 }
 
 .rbc-month-view {
@@ -60,7 +75,21 @@
 
 .rbc-timeslot-group {
   border-bottom: 1px solid #f1f5f9 !important;
-  min-height: 45px !important;
+  min-height: 72px !important;
+}
+
+/* Widen the time gutter so "12:00 AM" doesn't get clipped */
+.rbc-time-gutter {
+  min-width: 72px !important;
+  width: 72px !important;
+}
+
+.rbc-label {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: #94a3b8 !important;
+  padding: 0 8px !important;
+  white-space: nowrap !important;
 }
 
 .rbc-time-content {

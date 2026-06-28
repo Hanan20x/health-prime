@@ -1,10 +1,11 @@
-import { useMemo, useState, useRef } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertTriangle,
   Pencil,
@@ -31,6 +32,8 @@ import {
   Sparkles,
   BookOpen,
   CheckCircle2,
+  Stethoscope,
+  Save,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -49,444 +52,6 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { useLang } from "@/hooks/useLang";
 import { tx, txEmrSection, txGender, txStatus } from "@/lib/i18n";
 import { toast } from "sonner";
-
-// ─── Types for parsed AI report ───────────────────────────────────────────────
-
-interface ParsedScoreItem {
-  label: string;
-  score: number;
-  note: string;
-}
-
-interface ParsedSuggestion {
-  index: number;
-  code: string;
-  title: string;
-  confidenceRaw: string; // e.g. "85% — HIGH"
-  confidencePct: number;
-  confidenceLevel: "HIGH" | "MODERATE" | "LOW";
-  rationale: string;
-  scores: ParsedScoreItem[];
-  sources: string[];
-  physicianReview: string;
-}
-
-interface ParsedClinicalReport {
-  urgentMessage: string | null;
-  dataQualityFlags: string;
-  suggestions: ParsedSuggestion[];
-  differentialConsiderations: string;
-  reasoningTrace: string;
-  disclaimer: string;
-}
-
-// ─── parseClinicalReport ──────────────────────────────────────────────────────
-
-function parseClinicalReport(report: string): ParsedClinicalReport {
-  const lines = report.split("\n");
-
-  let urgentMessage: string | null = null;
-  let dataQualityFlags = "";
-  const suggestions: ParsedSuggestion[] = [];
-  let differentialConsiderations = "";
-  let reasoningTrace = "";
-  let disclaimer = "";
-
-  // Detect urgent message at the top
-  const urgentLineIdx = lines.findIndex((l) =>
-    /🚨\s*URGENT/i.test(l) || /\*\*🚨/.test(l)
-  );
-  if (urgentLineIdx !== -1) {
-    urgentMessage = lines[urgentLineIdx]
-      .replace(/\*\*/g, "")
-      .replace(/^#+\s*/, "")
-      .trim();
-  }
-
-  // Helper: extract a block of text from one heading to the next
-  const extractSection = (startPattern: RegExp, endPatterns: RegExp[]): string => {
-    const startIdx = lines.findIndex((l) => startPattern.test(l));
-    if (startIdx === -1) return "";
-    const endIdx = lines.findIndex(
-      (l, i) => i > startIdx && endPatterns.some((p) => p.test(l))
-    );
-    const slice = endIdx === -1 ? lines.slice(startIdx + 1) : lines.slice(startIdx + 1, endIdx);
-    return slice.join("\n").trim();
-  };
-
-  const headings = [
-    /^###\s+.*DATA QUALITY FLAGS/i,
-    /^###\s+.*SUGGESTED ICD/i,
-    /^###\s+.*DIFFERENTIAL/i,
-    /^###\s+.*REASONING TRACE/i,
-    /^###\s+.*DISCLAIMER/i,
-  ];
-
-  dataQualityFlags = extractSection(headings[0], headings.slice(1));
-  differentialConsiderations = extractSection(headings[2], headings.slice(3));
-  reasoningTrace = extractSection(headings[3], headings.slice(4));
-  disclaimer = extractSection(headings[4], []);
-
-  // Parse suggestions block
-  const suggestionsBlockStart = lines.findIndex((l) => headings[1].test(l));
-  const suggestionsBlockEnd = lines.findIndex(
-    (l, i) => i > suggestionsBlockStart && headings[2].test(l)
-  );
-  const suggestionLines =
-    suggestionsBlockStart === -1
-      ? []
-      : suggestionsBlockEnd === -1
-      ? lines.slice(suggestionsBlockStart + 1)
-      : lines.slice(suggestionsBlockStart + 1, suggestionsBlockEnd);
-
-  // Split into per-suggestion chunks by the "**Suggestion N:" pattern
-  const suggChunks: string[][] = [];
-  let currentChunk: string[] = [];
-  for (const line of suggestionLines) {
-    if (/^\*\*Suggestion\s+\d+:/i.test(line)) {
-      if (currentChunk.length > 0) suggChunks.push(currentChunk);
-      currentChunk = [line];
-    } else {
-      currentChunk.push(line);
-    }
-  }
-  if (currentChunk.length > 0) suggChunks.push(currentChunk);
-
-  for (let ci = 0; ci < suggChunks.length; ci++) {
-    const chunk = suggChunks[ci];
-    const headerLine = chunk[0] || "";
-
-    // Parse code and title from "**Suggestion N: CODE — Title**"
-    const headerMatch = headerLine.match(
-      /\*\*Suggestion\s+(\d+):\s*([A-Z][A-Z0-9.]+)\s*[—–-]+\s*(.+?)\*\*/i
-    );
-    const index = headerMatch ? parseInt(headerMatch[1]) : ci + 1;
-    const code = headerMatch ? headerMatch[2].trim() : "";
-    const title = headerMatch ? headerMatch[3].trim() : "";
-
-    // Parse confidence line
-    let confidenceRaw = "";
-    let confidencePct = 0;
-    let confidenceLevel: "HIGH" | "MODERATE" | "LOW" = "LOW";
-    for (const line of chunk) {
-      const confMatch = line.match(/Confidence score:\s*(\d+)%\s*[—–-]+\s*(HIGH|MODERATE|LOW)/i);
-      if (confMatch) {
-        confidencePct = parseInt(confMatch[1]);
-        confidenceLevel = confMatch[2].toUpperCase() as "HIGH" | "MODERATE" | "LOW";
-        confidenceRaw = `${confidencePct}% — ${confidenceLevel}`;
-        break;
-      }
-    }
-
-    // Parse score breakdown lines
-    const scores: ParsedScoreItem[] = [];
-    const scorePattern = /^[-•*]\s+(.+?):\s*(\d+)\/100\s*[—–-]+\s*(.+)$/;
-    for (const line of chunk) {
-      const m = line.match(scorePattern);
-      if (m) {
-        scores.push({ label: m[1].trim(), score: parseInt(m[2]), note: m[3].trim() });
-      }
-    }
-
-    // Parse rationale (after "**Clinical rationale**:" until next ** section)
-    let rationale = "";
-    const rationaleStart = chunk.findIndex((l) => /\*\*Clinical rationale\*\*/i.test(l));
-    if (rationaleStart !== -1) {
-      const rationaleEnd = chunk.findIndex(
-        (l, i) => i > rationaleStart && /^\*\*/.test(l)
-      );
-      const rationaleLines =
-        rationaleEnd === -1
-          ? chunk.slice(rationaleStart + 1)
-          : chunk.slice(rationaleStart + 1, rationaleEnd);
-      rationale = rationaleLines
-        .join(" ")
-        .replace(/^\s*[-•]\s*/, "")
-        .trim();
-    }
-
-    // Parse verified sources
-    const sources: string[] = [];
-    const sourcesStart = chunk.findIndex((l) => /\*\*Verified sources\*\*/i.test(l));
-    if (sourcesStart !== -1) {
-      const sourcesEnd = chunk.findIndex(
-        (l, i) => i > sourcesStart && /^\*\*/.test(l)
-      );
-      const sourceLines =
-        sourcesEnd === -1
-          ? chunk.slice(sourcesStart + 1)
-          : chunk.slice(sourcesStart + 1, sourcesEnd);
-      for (const sl of sourceLines) {
-        const sm = sl.match(/^\d+\.\s*(.+)/);
-        if (sm) sources.push(sm[1].trim());
-      }
-    }
-
-    // Parse physician review
-    let physicianReview = "";
-    const phyStart = chunk.findIndex((l) => /\*\*Physician review required/i.test(l));
-    if (phyStart !== -1) {
-      const phyEnd = chunk.findIndex(
-        (l, i) => i > phyStart && /^\*\*/.test(l)
-      );
-      const phyLines =
-        phyEnd === -1
-          ? chunk.slice(phyStart + 1)
-          : chunk.slice(phyStart + 1, phyEnd);
-      physicianReview = phyLines
-        .join(" ")
-        .replace(/^\s*[-•]\s*/, "")
-        .trim();
-    }
-
-    if (code) {
-      suggestions.push({
-        index,
-        code,
-        title,
-        confidenceRaw,
-        confidencePct,
-        confidenceLevel,
-        rationale,
-        scores,
-        sources,
-        physicianReview,
-      });
-    }
-  }
-
-  return {
-    urgentMessage,
-    dataQualityFlags,
-    suggestions,
-    differentialConsiderations,
-    reasoningTrace,
-    disclaimer,
-  };
-}
-
-// ─── ClinicalReportView ────────────────────────────────────────────────────────
-
-function ClinicalReportView({
-  report,
-  onApply,
-  lang,
-}: {
-  report: ParsedClinicalReport;
-  onApply: (code: string, title: string) => void;
-  lang: "en" | "ar";
-}) {
-  const [reasoningOpen, setReasoningOpen] = useState(false);
-
-  const confidenceColor = (level: "HIGH" | "MODERATE" | "LOW") => {
-    if (level === "HIGH") return "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800";
-    if (level === "MODERATE") return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800";
-    return "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-400 dark:border-red-800";
-  };
-
-  const scoreBarColor = (score: number) => {
-    if (score >= 75) return "bg-emerald-500";
-    if (score >= 50) return "bg-amber-500";
-    return "bg-red-500";
-  };
-
-  return (
-    <div className="space-y-4 mt-4">
-      {/* Urgent Warning */}
-      {report.urgentMessage && (
-        <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-2xl p-4 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
-          <p className="text-sm font-bold text-red-700 dark:text-red-400 leading-relaxed">
-            {report.urgentMessage}
-          </p>
-        </div>
-      )}
-
-      {/* Data Quality Flags */}
-      {report.dataQualityFlags && (
-        <div className={cn(
-          "rounded-2xl p-5 border",
-          report.dataQualityFlags.toLowerCase().includes("none")
-            ? "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800"
-            : "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800"
-        )}>
-          <p className={cn(
-            "text-[10px] font-black uppercase tracking-widest mb-2",
-            report.dataQualityFlags.toLowerCase().includes("none")
-              ? "text-emerald-700 dark:text-emerald-400"
-              : "text-amber-700 dark:text-amber-400"
-          )}>
-            Data Quality Flags
-          </p>
-          <p className={cn(
-            "text-xs font-medium",
-            report.dataQualityFlags.toLowerCase().includes("none")
-              ? "text-emerald-800 dark:text-emerald-300"
-              : "text-amber-800 dark:text-amber-300"
-          )}>
-            {report.dataQualityFlags}
-          </p>
-        </div>
-      )}
-
-      {/* Suggestions */}
-      {report.suggestions.map((s) => (
-        <div
-          key={s.code}
-          className="bg-card border border-border/50 rounded-2xl p-6 shadow-sm hover:shadow-md transition-all"
-        >
-          {/* Header */}
-          <div className="flex items-start justify-between gap-3 mb-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="px-3 py-1 font-black text-sm bg-primary/10 text-primary border border-primary/20 rounded-lg">
-                {s.code}
-              </span>
-              <span className="text-sm font-bold text-foreground">{s.title}</span>
-            </div>
-            <span className={cn(
-              "px-2.5 py-1 text-[10px] font-black uppercase tracking-wider rounded-lg border shrink-0",
-              confidenceColor(s.confidenceLevel)
-            )}>
-              {s.confidencePct}% {s.confidenceLevel}
-            </span>
-          </div>
-
-          {/* Rationale */}
-          {s.rationale && (
-            <p className="text-xs text-foreground/70 leading-relaxed mb-4 font-medium">
-              {s.rationale}
-            </p>
-          )}
-
-          {/* Score bars */}
-          {s.scores.length > 0 && (
-            <div className="space-y-2.5 mb-4">
-              <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2">
-                Score Breakdown
-              </p>
-              {s.scores.map((sc) => (
-                <div key={sc.label} className="space-y-1">
-                  <div className="flex items-center justify-between text-[10px] font-bold">
-                    <span className="text-foreground/70">{sc.label}</span>
-                    <span className="text-primary">{sc.score}/100</span>
-                  </div>
-                  <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className={cn("h-full rounded-full transition-all", scoreBarColor(sc.score))}
-                      style={{ width: `${sc.score}%` }}
-                    />
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">{sc.note}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Sources */}
-          {s.sources.length > 0 && (
-            <div className="mb-4">
-              <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-1.5">
-                Verified Sources
-              </p>
-              {s.sources.map((src, i) => (
-                <p key={i} className="text-[11px] text-foreground/60 font-medium leading-relaxed">
-                  {i + 1}. {src}
-                </p>
-              ))}
-            </div>
-          )}
-
-          {/* Physician review */}
-          {s.physicianReview && (
-            <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3 mb-4">
-              <p className="text-[10px] font-black uppercase tracking-widest text-amber-700 dark:text-amber-400 mb-1">
-                Physician Review Required
-              </p>
-              <p className="text-[11px] text-amber-800 dark:text-amber-300 font-medium leading-relaxed">
-                {s.physicianReview}
-              </p>
-            </div>
-          )}
-
-          {/* Apply button */}
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full mt-2 border-primary/20 text-primary hover:bg-primary/5 font-bold text-xs h-9 rounded-xl"
-            onClick={() => onApply(s.code, s.title)}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
-            {tx("applyToPlan", lang)}
-          </Button>
-        </div>
-      ))}
-
-      {/* Differential Considerations */}
-      {report.differentialConsiderations && (
-        <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-2">
-            Differential Considerations
-          </p>
-          <p className="text-xs text-foreground/70 leading-relaxed font-medium whitespace-pre-wrap">
-            {report.differentialConsiderations}
-          </p>
-        </div>
-      )}
-
-      {/* Reasoning Trace — collapsible */}
-      {report.reasoningTrace && (
-        <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-sm">
-          <button
-            onClick={() => setReasoningOpen((o) => !o)}
-            className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-muted/20 transition-colors"
-          >
-            <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
-              Reasoning Trace
-            </p>
-            {reasoningOpen ? (
-              <ChevronDown className="w-4 h-4 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="w-4 h-4 text-muted-foreground" />
-            )}
-          </button>
-          {reasoningOpen && (
-            <div className="px-5 pb-5 border-t border-border/40">
-              <p className="text-xs text-foreground/60 leading-relaxed font-medium whitespace-pre-wrap mt-3">
-                {report.reasoningTrace}
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Disclaimer */}
-      {report.disclaimer && (
-        <div className="bg-muted/30 border border-border/40 rounded-xl p-4">
-          <p className="text-[10px] text-muted-foreground leading-relaxed italic">
-            {report.disclaimer.replace(/^>\s*/, "")}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── DiagnosisResponse type (matching backend) ─────────────────────────────────
-
-interface DiagnosisSuggestion {
-  icd_code: string;
-  icd_title: string;
-  accuracy: number;
-  reasoning: string;
-  accuracy_explanation: string;
-  medical_source?: string | null;
-}
-
-interface DiagnosisResponse {
-  suggestions: DiagnosisSuggestion[];
-  compiled_details?: string | null;
-  analysis_report?: string | null;
-}
 
 // ─── PatientEMRPage ────────────────────────────────────────────────────────────
 
@@ -525,25 +90,138 @@ export default function PatientEMRPage() {
   const recordsBySection = useMemo(() => {
     if (!data) return {};
     const map: Record<string, any[]> = {};
-    data.sections.forEach(s => {
-      const key = s.key;
-      if (!map[key]) map[key] = [];
-      map[key].push(s);
-    });
+    if (data.sections) {
+      data.sections.forEach(s => {
+        const key = s.key;
+        if (!map[key]) map[key] = [];
+        map[key].push(s);
+      });
+    }
     return map;
+  }, [data]);
+
+  const latestVitals = useMemo(() => {
+    const composite = { height: "—", weight: "—", bmi: "—", temp: "—", bp: "—", hr: "—", spo2: "—" };
+    const vitalsHistory = data?.vitals_history || data?.vitalsHistory || [];
+    if (!vitalsHistory || vitalsHistory.length === 0) return composite;
+    
+    for (const v of vitalsHistory) {
+      if (composite.height === "—" && v.height && v.height !== "—") composite.height = v.height;
+      if (composite.weight === "—" && v.weight && v.weight !== "—") composite.weight = v.weight;
+      if (composite.bmi === "—" && v.bmi && v.bmi !== "—") composite.bmi = v.bmi;
+      if (composite.temp === "—" && v.temp && v.temp !== "—") composite.temp = v.temp;
+      if (composite.bp === "—" && v.bp && v.bp !== "—") composite.bp = v.bp;
+      if (composite.hr === "—" && v.hr && v.hr !== "—") composite.hr = v.hr;
+      if (composite.spo2 === "—" && v.spo2 && v.spo2 !== "—") composite.spo2 = v.spo2;
+    }
+    return composite;
   }, [data]);
 
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["Chief Complaints"]));
   const [editingId, setEditingId] = useState<string | null>("Chief Complaints");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [orderFilter, setOrderFilter] = useState<"Lab" | "Imaging" | "Prescription">("Lab");
   const [recordToDelete, setRecordToDelete] = useState<number | null>(null);
   const [draftToClear, setDraftToClear] = useState<string | null>(null);
 
-  // AI Diagnosis state
-  const [diagnosisDetails, setDiagnosisDetails] = useState("");
-  const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResponse | null>(null);
-  const [parsedReport, setParsedReport] = useState<ParsedClinicalReport | null>(null);
+  // --- Diagnoses ---
+  const [aiConsentOpen, setAiConsentOpen] = useState(false);
+  const [aiConsentDisclaimerChecked, setAiConsentDisclaimerChecked] = useState(false);
+  const [aiConsentPatientChecked, setAiConsentPatientChecked] = useState(false);
+
+  const [addingDiagnosis, setAddingDiagnosis] = useState(false);
+  const [newDiagCode, setNewDiagCode] = useState("");
+  const [newDiagTitle, setNewDiagTitle] = useState("");
+  const [newDiagNotes, setNewDiagNotes] = useState("");
+  const [isAddDiagnosisModalOpen, setIsAddDiagnosisModalOpen] = useState(false);
+  const [editingDiagnosisId, setEditingDiagnosisId] = useState<number | null>(null);
+  const [editDiagStatus, setEditDiagStatus] = useState("Active");
+  const [editDiagNotes, setEditDiagNotes] = useState("");
+  const [editDiagCode, setEditDiagCode] = useState("");
+  const [editDiagTitle, setEditDiagTitle] = useState("");
+  const [editIcdSearch, setEditIcdSearch] = useState("");
+  const [editIcdResults, setEditIcdResults] = useState<{code: string, title: string}[]>([]);
+  const [editIcdLoading, setEditIcdLoading] = useState(false);
+  const [showEditIcdDropdown, setShowEditIcdDropdown] = useState(false);
+  const [diagnosisToDelete, setDiagnosisToDelete] = useState<number | null>(null);
+
+  const [icdSearchTerm, setIcdSearchTerm] = useState("");
+  const [icdSearchResults, setIcdSearchResults] = useState<{code: string, title: string, description?: string}[]>([]);
+
+  const [isSearchingIcd, setIsSearchingIcd] = useState(false);
+  const [showIcdDropdown, setShowIcdDropdown] = useState(false);
+
+  const [viewingDiagnosisNotes, setViewingDiagnosisNotes] = useState<{title: string, notes: string} | null>(null);
+
+  useEffect(() => {
+    if (icdSearchTerm.length < 2) {
+      setIcdSearchResults([]);
+      return;
+    }
+    // Only search if we haven't selected a final diagnosis (the search term wouldn't just be the display string)
+    if (newDiagCode && icdSearchTerm.includes(newDiagCode)) return;
+
+    const delayDebounceFn = setTimeout(() => {
+      setIsSearchingIcd(true);
+      apiFetch(`/icd10/search?q=${encodeURIComponent(icdSearchTerm)}`)
+        .then((res: any) => setIcdSearchResults(res || []))
+        .catch(() => setIcdSearchResults([]))
+        .finally(() => setIsSearchingIcd(false));
+    }, 500);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [icdSearchTerm, newDiagCode]);
+
+  useEffect(() => {
+    if (editIcdSearch.length < 2) { setEditIcdResults([]); return; }
+    if (editDiagCode && editIcdSearch.includes(editDiagCode)) return;
+    const t = setTimeout(() => {
+      setEditIcdLoading(true);
+      apiFetch(`/icd10/search?q=${encodeURIComponent(editIcdSearch)}`)
+        .then((res: any) => setEditIcdResults(res || []))
+        .catch(() => setEditIcdResults([]))
+        .finally(() => setEditIcdLoading(false));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [editIcdSearch, editDiagCode]);
+
+
+  const addDiagnosisMutation = useMutation({
+    mutationFn: (body: any) => apiFetch(`/patients/${patientId}/diagnoses`, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["emr", patientId] });
+      setAddingDiagnosis(false);
+      setNewDiagCode("");
+      setNewDiagTitle("");
+      setNewDiagNotes("");
+      setIsAddDiagnosisModalOpen(false);
+      toast.success("Diagnosis added successfully");
+    },
+    onError: (error: any) => toast.error(error instanceof Error ? error.message : "Failed to add diagnosis")
+  });
+
+  const deleteDiagMutation = useMutation({
+    mutationFn: (id: number) => apiFetch(`/patients/${patientId}/diagnoses/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["emr", patientId] });
+      setDiagnosisToDelete(null);
+      toast.success("Diagnosis removed");
+    },
+    onError: (error: any) => toast.error(error instanceof Error ? error.message : "Failed to delete diagnosis")
+  });
+
+  const editDiagMutation = useMutation({
+    mutationFn: ({ id, status, notes, icd_code, icd_title }: { id: number, status: string, notes: string, icd_code?: string, icd_title?: string }) =>
+      apiFetch(`/patients/${patientId}/diagnoses/${id}`, { method: "PATCH", body: JSON.stringify({ status, notes, icd_code, icd_title }) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["emr", patientId] });
+      setEditingDiagnosisId(null);
+      toast.success("Diagnosis updated");
+    },
+    onError: (error: any) => toast.error(error instanceof Error ? error.message : "Failed to update diagnosis")
+  });
+
+
+
 
   const saveMutation = useMutation({
     mutationFn: async ({ sectionId, content }: { sectionId: string; content: string }) => {
@@ -593,31 +271,7 @@ export default function PatientEMRPage() {
     onError: () => toast.error(tx("failedUpdatePhoto", lang))
   });
 
-  const diagnosisMutation = useMutation({
-    mutationFn: (details: string) =>
-      apiFetch<DiagnosisResponse>(`/patients/${patientId}/ai-diagnosis`, {
-        method: "POST",
-        body: JSON.stringify({ details: details || null }),
-      }),
-    onSuccess: (result) => {
-      setDiagnosisResult(result);
-      if (result.analysis_report) {
-        setParsedReport(parseClinicalReport(result.analysis_report));
-      }
-      toast.success(tx("suggestionsTitle", lang));
-    },
-    onError: () => toast.error(tx("failedSaveEntry", lang)),
-  });
 
-  const handleApplyToPlan = (code: string, title: string) => {
-    const planDraft = drafts["Plan of Care"] || "";
-    const entry = `${code} — ${title}`;
-    const newDraft = planDraft ? `${planDraft}\n• ${entry}` : `• ${entry}`;
-    setDrafts(prev => ({ ...prev, "Plan of Care": newDraft }));
-    setExpandedSections(prev => new Set([...prev, "Plan of Care"]));
-    setEditingId("Plan of Care");
-    toast.success(tx("suggestionApplied", lang));
-  };
 
   const toggleSection = (sectionId: string) => {
     setExpandedSections((prev) => {
@@ -657,31 +311,18 @@ export default function PatientEMRPage() {
   if (isLoading) return <DashboardLayout><Skeleton className="h-[600px] w-full" /></DashboardLayout>;
 
   if (!id || id === "undefined" || patientId === 0) {
-    return (
-      <DashboardLayout>
-        <div className="flex flex-col items-center justify-center p-20 space-y-6 text-center bg-card/50 border-2 border-dashed border-border rounded-xl mt-10">
-          <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center">
-            <UserRound className="w-10 h-10 text-primary" />
-          </div>
-          <div className="space-y-2">
-            <h2 className="text-2xl font-black text-primary uppercase tracking-tight">{tx("noPatientSelected", lang)}</h2>
-            <p className="text-muted-foreground max-w-sm mx-auto font-medium">
-              {tx("emrAccessDesc", lang)}
-            </p>
-          </div>
-          <Button onClick={() => navigate("/patients")} className="bg-primary hover:bg-primary/90 text-white font-bold h-11 px-8">
-             {tx("browsePatientRecords", lang)}
-          </Button>
-        </div>
-      </DashboardLayout>
-    );
+    navigate("/patients", { replace: true });
+    return null;
   }
 
-  if (error || !data) return <DashboardLayout><div className="p-10 text-center text-destructive">{tx("error", lang)}</div></DashboardLayout>;
+  if (isLoading) return <DashboardLayout><div className="p-20 text-center flex flex-col items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-primary mb-4" /><p className="text-muted-foreground font-bold uppercase tracking-widest">{tx("loading", lang) || "Loading..."}</p></div></DashboardLayout>;
+  
+  if (error) return <DashboardLayout><div className="p-10 text-center text-destructive font-bold bg-destructive/10 m-6 rounded-xl border border-destructive/20">{tx("error", lang)}: {error instanceof Error ? error.message : "Failed to load"}</div></DashboardLayout>;
+  
+  if (!data) return <DashboardLayout><div className="p-10 text-center text-muted-foreground font-bold">No data found</div></DashboardLayout>;
 
   const patient = data.patient;
   const vitalsHistory = data.vitals_history || data.vitalsHistory || [];
-  const latestVitals = vitalsHistory[0] || null;
 
   return (
     <DashboardLayout>
@@ -733,14 +374,15 @@ export default function PatientEMRPage() {
            </div>
 
            <div className="flex-1 w-full space-y-6">
-              <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
                  {[
-                   { label: tx("heightUnit", lang), value: latestVitals?.height || "—", icon: MoveHorizontal },
-                   { label: tx("weightUnit", lang), value: latestVitals?.weight || "—", icon: MoveHorizontal },
-                   { label: tx("bmiUnit", lang), value: latestVitals?.bmi || "—", color: "text-destructive", icon: Activity },
-                   { label: tx("bpUnit", lang), value: patient.vitals.bp, icon: Activity },
-                   { label: tx("hrUnit", lang), value: patient.vitals.hr, icon: Heart },
-                   { label: tx("spo2Unit", lang), value: patient.vitals.spo2, icon: Activity },
+                   { label: tx("heightUnit", lang) || "Height", value: latestVitals?.height || "—", icon: MoveHorizontal },
+                   { label: tx("weightUnit", lang) || "Weight", value: latestVitals?.weight || "—", icon: MoveHorizontal },
+                   { label: tx("bmiUnit", lang) || "BMI", value: latestVitals?.bmi || "—", color: "text-destructive", icon: Activity },
+                   { label: "Temp (°C)", value: latestVitals?.temp || "—", icon: Activity },
+                   { label: tx("bpUnit", lang) || "BP", value: latestVitals?.bp || "—", icon: Activity },
+                   { label: tx("hrUnit", lang) || "HR", value: latestVitals?.hr || "—", icon: Heart },
+                   { label: tx("spo2Unit", lang) || "SpO2", value: latestVitals?.spo2 || "—", icon: Activity },
                  ].map((stat, i) => (
                    <div key={i} className="bg-card border border-border/50 p-5 rounded-xl shadow-sm hover:shadow-md transition-shadow ring-1 ring-border/5">
                       <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1.5">{stat.label}</p>
@@ -760,11 +402,13 @@ export default function PatientEMRPage() {
            </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-           <div className="lg:col-span-8 flex flex-col bg-card border border-border/60 rounded-2xl overflow-hidden shadow-lg shadow-primary/5">
-              <div className="px-6 py-4 border-b border-border/60 bg-muted/30 flex items-center justify-between">
-                 <h3 className="text-xs font-black uppercase tracking-[0.2em] text-primary flex items-center gap-3">
-                    <History className="w-4 h-4" /> {tx("clinicalHistory", lang)}
+<div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+           <div className="lg:col-span-8 flex flex-col gap-8">
+              <div className="flex flex-col bg-card border border-border/60 rounded-2xl overflow-hidden shadow-lg shadow-primary/5">
+
+              <div className="px-6 py-5 border-b border-border/60 bg-muted/30 flex items-center justify-between">
+                 <h3 className="text-sm font-black uppercase tracking-[0.2em] text-primary flex items-center gap-3">
+                    <History className="w-5 h-5" /> {tx("clinicalHistory", lang)}
                  </h3>
               </div>
 
@@ -778,12 +422,17 @@ export default function PatientEMRPage() {
                    return (
                      <div key={key} className="flex flex-col group/section">
                         <button onClick={() => toggleSection(key)} className={cn("w-full flex items-center gap-4 px-8 py-5 text-left transition-all no-print", isOpen ? "bg-primary/5 border-l-[3px] border-primary" : "hover:bg-muted/10 border-l-[3px] border-transparent")}>
-                           <div className={cn("p-1 rounded-md transition-colors", isOpen ? "bg-primary text-white" : "bg-muted text-muted-foreground")}>
-                              {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                           <div className={cn("p-1.5 rounded-md transition-colors", isOpen ? "bg-primary text-white" : "bg-muted text-muted-foreground")}>
+                              {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                            </div>
-                           <span className={cn("text-xs font-black uppercase tracking-wider transition-colors", isOpen ? "text-primary" : "text-muted-foreground group-hover/section:text-foreground")}>{txEmrSection(title, lang)}</span>
+                           <span className={cn("text-sm font-black uppercase tracking-wider transition-colors", isOpen ? "text-primary" : "text-muted-foreground group-hover/section:text-foreground")}>{txEmrSection(title, lang)}</span>
                            <div className="ml-auto flex items-center gap-3">
-                              {history.length > 0 && <span className="text-[10px] font-black bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">{history.length} {tx("records", lang)}</span>}
+                              {title === "Chief Complaints" && (
+                                <Button size="sm" variant="outline" className="h-8 text-xs font-bold shadow-sm bg-white pointer-events-auto" onClick={(e) => { e.stopPropagation(); setIsAddDiagnosisModalOpen(true); }}>
+                                   <Plus className="w-3.5 h-3.5 mr-1" /> Add Manual Diagnosis
+                                </Button>
+                              )}
+                              {history.length > 0 && <span className="text-xs font-black bg-primary/10 text-primary px-3 py-1 rounded-full border border-primary/20">{history.length} {tx("records", lang)}</span>}
                               <Pencil className={cn("w-4 h-4 text-primary transition-all", isEditing ? "opacity-100 scale-110" : "opacity-0 group-hover/section:opacity-100")} />
                            </div>
                         </button>
@@ -792,11 +441,11 @@ export default function PatientEMRPage() {
 
                         {(isOpen || true) && (
                           <div className={cn("px-16 pb-8 pt-4 bg-background/20 space-y-8", !isOpen && "print:block hidden")}>
-                             {isOpen && (
+                             {isOpen && title !== "Chief Complaints" && (
                                <div className="space-y-4 bg-card border border-primary/10 rounded-2xl p-6 shadow-xl no-print ring-1 ring-primary/5">
                                   <div className="flex items-center justify-between border-b border-border/50 pb-3 mb-4">
-                                     <p className="text-[10px] font-black uppercase text-primary flex items-center gap-2">
-                                        <Plus className="w-3 h-3" /> {tx("newLogEntry", lang)}
+                                     <p className="text-xs font-black uppercase text-primary flex items-center gap-2">
+                                        <Plus className="w-4 h-4" /> {tx("newLogEntry", lang)}
                                      </p>
                                      <div className="flex gap-4">
                                         <button title={tx("clearAll", lang)} onClick={() => setDraftToClear(key)} className="p-1.5 rounded-lg hover:bg-destructive/10 text-destructive/40 hover:text-destructive transition-all"><Trash2 className="w-4 h-4" /></button>
@@ -816,6 +465,138 @@ export default function PatientEMRPage() {
                                      </Button>
                                   </div>
                                </div>
+                             )}
+
+                             {title === "Chief Complaints" && (
+                                <div className="space-y-4 bg-card border border-primary/10 rounded-2xl p-6 shadow-xl no-print ring-1 ring-primary/5">
+                                  <h4 className="text-sm font-black uppercase tracking-widest text-primary flex items-center gap-2 mb-4">
+                                    <Stethoscope className="w-4 h-4" /> Structured Diagnoses
+                                  </h4>
+                                  {data?.diagnoses && data.diagnoses.length > 0 ? (
+                     <div className="space-y-3">
+                        <h4 className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-3 mt-4">Saved Diagnoses</h4>
+                        {data.diagnoses.map(d => (
+                           <div key={d.id} className="group relative flex flex-col gap-3 p-6 rounded-2xl border-2 border-border/50 hover:border-primary/30 transition-all bg-background hover:shadow-md">
+                              {/* Row 1: icon + badges + action buttons */}
+                              <div className="flex items-center justify-between">
+                                 <div className="flex items-center gap-2 flex-wrap">
+                                    <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0">
+                                       <Stethoscope className="w-5 h-5" />
+                                    </div>
+                                    <span className="text-sm font-black bg-primary/10 text-primary px-3 py-1 rounded-lg uppercase tracking-wide">{d.icdCode || "-"}</span>
+                                    {d.isAiGenerated ? (
+                                       <span className="text-xs font-black uppercase text-amber-600 bg-amber-100 px-3 py-1 rounded-lg">AI Assisted</span>
+                                    ) : (
+                                       <span className="text-xs font-black uppercase text-slate-600 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200">Manual</span>
+                                    )}
+                                 </div>
+                                 <div className="flex items-center gap-2 shrink-0">
+                                    <Button size="icon" variant="ghost" className="h-9 w-9 text-muted-foreground hover:text-primary hover:bg-primary/10" onClick={() => { setEditingDiagnosisId(d.id); setEditDiagStatus(d.status); setEditDiagNotes(d.notes || ""); setEditDiagCode(d.icdCode || ""); setEditDiagTitle(d.icdTitle || ""); setEditIcdSearch(d.icdCode || ""); setEditIcdResults([]); }}>
+                                       <Pencil className="w-4 h-4" />
+                                    </Button>
+                                    <Button size="icon" variant="ghost" className="h-9 w-9 text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => deleteDiagMutation.mutate(d.id)}>
+                                       <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                 </div>
+                              </div>
+
+                              {/* Row 2: title */}
+                              <span className="font-bold text-lg text-foreground leading-snug" title={d.icdTitle || "-"}>{d.icdTitle || "-"}</span>
+
+                              {/* Row 3: date + status */}
+                              <div className="flex items-center gap-3">
+                                 <p className="text-sm text-muted-foreground font-medium flex items-center gap-1.5">
+                                    <CalendarDays className="w-4 h-4" /> {d.diagnosedAt ? new Date(d.diagnosedAt).toLocaleDateString() : "Unknown date"} at {d.diagnosedAt ? new Date(d.diagnosedAt).toLocaleTimeString([], {hour: "2-digit", minute:"2-digit"}) : "Unknown time"}
+                                 </p>
+                                 <span className={`text-xs font-bold uppercase px-3 py-0.5 rounded-full ${d.status === 'Active' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>{d.status}</span>
+                              </div>
+
+                              {d.notes && <p className="text-sm text-muted-foreground leading-relaxed line-clamp-2">{d.notes}</p>}
+
+                              <div>
+                                 {d.isAiGenerated ? (
+                                   d.notes && (
+                                     <Button variant="outline" className="h-9 px-5 text-sm font-bold border-amber-200 text-amber-700 hover:bg-amber-50" onClick={() => navigate(`/patients/emr/${patientId}/diagnosis`, { state: { restoredDiagnosis: d } })}>
+                                        <Sparkles className="w-4 h-4 mr-2" /> View AI Breakdown
+                                     </Button>
+                                   )
+                                 ) : (
+                                   <Button variant="outline" className="h-9 px-5 text-sm font-bold text-slate-600 hover:bg-slate-50 border-slate-200" onClick={() => setViewingDiagnosisNotes({title: d.icdTitle || "Manual Diagnosis", notes: d.notes || "No clinical notes were provided for this diagnosis."})}>
+                                      <CheckCircle2 className="w-4 h-4 mr-2" /> View Clinical Notes
+                                   </Button>
+                                 )}
+                              </div>
+
+                              {editingDiagnosisId === d.id && (
+                                    <div className="mt-5 p-6 bg-primary/5 border-2 border-primary/25 rounded-2xl space-y-5 shadow-md">
+                                       <div className="flex items-center justify-between mb-1">
+                                          <div className="flex items-center gap-2">
+                                             <span className="w-1.5 h-5 rounded-full bg-primary inline-block" />
+                                             <span className="text-sm font-black uppercase tracking-widest text-primary">Edit Diagnosis</span>
+                                          </div>
+                                          <button onClick={() => setEditingDiagnosisId(null)} className="p-1.5 rounded-lg hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors" title="Close">
+                                             <X className="w-4 h-4" />
+                                          </button>
+                                       </div>
+                                       <div className="relative">
+                                          <label className="text-xs font-bold uppercase tracking-widest text-primary/70 mb-2 block">ICD-10 Code</label>
+                                          <input
+                                             type="text"
+                                             className="w-full h-11 px-4 text-sm font-medium rounded-xl border-2 border-primary/20 bg-background focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all"
+                                             placeholder="Search ICD-10 code or diagnosis name..."
+                                             value={editIcdSearch}
+                                             onChange={e => { setEditIcdSearch(e.target.value); setShowEditIcdDropdown(true); }}
+                                             onFocus={() => editIcdResults.length > 0 && setShowEditIcdDropdown(true)}
+                                          />
+                                          {editDiagCode && (
+                                             <div className="mt-2 flex items-center gap-2">
+                                                <span className="text-xs font-black bg-primary/10 text-primary px-3 py-1 rounded-lg uppercase tracking-wide">{editDiagCode}</span>
+                                                <span className="text-xs text-muted-foreground truncate">{editDiagTitle}</span>
+                                             </div>
+                                          )}
+                                          {showEditIcdDropdown && editIcdResults.length > 0 && (
+                                             <div className="absolute z-50 mt-1 w-full bg-background border-2 border-primary/20 rounded-xl shadow-xl max-h-60 overflow-y-auto">
+                                                {editIcdLoading ? (
+                                                   <div className="p-3 text-sm text-muted-foreground text-center">Searching...</div>
+                                                ) : (
+                                                   editIcdResults.map(r => (
+                                                      <button key={r.code} type="button"
+                                                         className="w-full text-left px-4 py-3 hover:bg-primary/5 border-b border-border/40 last:border-0 transition-colors"
+                                                         onClick={() => { setEditDiagCode(r.code); setEditDiagTitle(r.title); setEditIcdSearch(`${r.code} — ${r.title}`); setShowEditIcdDropdown(false); setEditIcdResults([]); }}>
+                                                         <span className="text-xs font-black text-primary mr-2">{r.code}</span>
+                                                         <span className="text-sm">{r.title}</span>
+                                                      </button>
+                                                   ))
+                                                )}
+                                             </div>
+                                          )}
+                                       </div>
+                                       <div>
+                                          <label className="text-xs font-bold uppercase tracking-widest text-primary/70 mb-2 block">Status</label>
+                                          <select className="w-48 h-11 px-4 text-sm font-medium rounded-xl border-2 border-primary/20 bg-background focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all" value={editDiagStatus} onChange={e => setEditDiagStatus(e.target.value)}>
+                                             <option value="Active">Active</option>
+                                             <option value="Resolved">Resolved</option>
+                                          </select>
+                                       </div>
+                                       <div>
+                                          <label className="text-xs font-bold uppercase tracking-widest text-primary/70 mb-2 block">Clinical Notes</label>
+                                          <textarea className="w-full p-4 text-sm rounded-xl border-2 border-primary/20 bg-background min-h-[140px] focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all resize-y leading-relaxed" value={editDiagNotes} onChange={e => setEditDiagNotes(e.target.value)} placeholder="Add clinical notes, observations, or treatment plan..." />
+                                       </div>
+                                       <div className="flex justify-end gap-3 pt-2 border-t border-primary/10">
+                                          <Button variant="outline" className="px-6 font-bold border-2" onClick={() => setEditingDiagnosisId(null)}>Cancel</Button>
+                                          <Button className="px-8 font-black bg-primary hover:bg-primary/90 text-white rounded-xl shadow-md" onClick={() => editDiagMutation.mutate({ id: d.id, status: editDiagStatus, notes: editDiagNotes, icd_code: editDiagCode, icd_title: editDiagTitle })} disabled={editDiagMutation.isPending}>
+                                             {editDiagMutation.isPending ? "Saving..." : "Save Changes"}
+                                          </Button>
+                                       </div>
+                                    </div>
+                                 )}
+                           </div>
+                        ))}
+                     </div>
+                  ) : (
+                     <div className="text-center py-6 text-sm text-muted-foreground font-medium">No diagnoses recorded yet.</div>
+                  )}
+                                </div>
                              )}
 
                              {history.length > 0 && (
@@ -841,17 +622,20 @@ export default function PatientEMRPage() {
                    );
                  })}
               </div>
-           </div>
+            </div>
+            
+            {/* Old position of Doctor Diagnosis */}
+         </div>
 
-           <div className="lg:col-span-4 flex flex-col gap-8 no-print">
+         <div className="lg:col-span-4 flex flex-col gap-8 no-print">
               <div className="bg-card border border-border/60 rounded-2xl overflow-hidden flex flex-col shadow-lg shadow-primary/5">
                  <div className="px-5 py-4 border-b border-border/60 bg-muted/30">
-                    <h4 className="text-[10px] font-black uppercase text-primary tracking-widest">{tx("vitalsMonitoring", lang)}</h4>
+                    <h4 className="text-sm font-black uppercase text-primary tracking-widest">{tx("vitalsMonitoring", lang)}</h4>
                  </div>
                  <div className="max-h-[350px] overflow-auto custom-scrollbar">
-                    <table className="w-full text-xs">
+                    <table className="w-full text-sm">
                        <thead className="bg-muted/10 sticky top-0 border-b border-border/40 z-10 backdrop-blur-md">
-                          <tr className="text-muted-foreground uppercase text-[10px] font-black tracking-tighter">
+                          <tr className="text-muted-foreground uppercase text-xs font-black tracking-tighter">
                              <th className="px-5 py-4 text-left">{tx("timestamp", lang)}</th>
                              <th className="px-5 py-4 text-left">{tx("bpUnit", lang)}</th>
                              <th className="px-5 py-4 text-left">{tx("hrUnit", lang)}</th>
@@ -870,77 +654,26 @@ export default function PatientEMRPage() {
                  </div>
               </div>
 
-              <div className="bg-card border border-border/60 rounded-2xl overflow-hidden shadow-lg shadow-primary/5 p-6 space-y-5">
-                 <div className="flex gap-2 p-1.5 bg-muted/40 rounded-xl border border-border/40">
-                    {(["Lab", "Imaging", "Prescription"] as const).map((tab) => (
-                      <button key={tab} onClick={() => setOrderFilter(tab)} className={cn("flex-1 py-3 text-[10px] font-black uppercase rounded-lg shadow-sm transition-all", orderFilter === tab ? "bg-primary text-white scale-[1.02]" : "text-muted-foreground bg-card hover:bg-muted/50")}>
-                        {tab === "Lab" ? tx("lab", lang) : tab === "Imaging" ? tx("imaging", lang) : tx("prescription", lang)}
-                      </button>
-                    ))}
-                 </div>
-                 <div className="border border-border/40 rounded-xl overflow-hidden bg-background/30 ring-1 ring-border/5">
-                    <table className="w-full text-[10px] border-collapse">
-                       <tbody className="divide-y divide-border/20">
-                          {data.orders.filter(o => o.type.includes(orderFilter) || orderFilter === "Lab").map((o) => (
-                            <tr key={o.id} className="hover:bg-primary/5 transition-colors">
-                               <td className="p-4 font-bold text-foreground/80 truncate max-w-[120px]">{o.description}</td>
-                               <td className="p-4 font-black text-primary text-right uppercase tracking-tighter">{txStatus(o.status, lang)}</td>
-                            </tr>
-                          ))}
-                       </tbody>
-                    </table>
-                 </div>
-              </div>
-
-              {/* AI Diagnostic Assistant */}
-              <div className="bg-card border border-border/60 rounded-2xl overflow-hidden shadow-lg shadow-primary/5">
-                 <div className="px-5 py-4 border-b border-border/60 bg-gradient-to-r from-primary/5 to-transparent">
-                    <h4 className="text-[10px] font-black uppercase text-primary tracking-widest flex items-center gap-2">
-                       <Sparkles className="w-4 h-4" /> {tx("aiDiagnosticAssistant", lang)}
+              {/* AI Diagnostic Assistant Callout */}
+              <div className="bg-gradient-to-br from-primary/5 via-card to-amber-500/[0.02] border border-border/60 rounded-2xl overflow-hidden shadow-lg shadow-primary/5 p-6 space-y-4">
+                 <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-amber-500 animate-pulse" />
+                    <h4 className="text-sm font-black uppercase text-primary tracking-widest">
+                       {tx("aiDiagnosticAssistant", lang)}
                     </h4>
                  </div>
-                 <div className="p-5 space-y-4">
-                    <div>
-                       <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2 block">
-                          {tx("initialDiagnosisPrompt", lang)}
-                       </label>
-                       <textarea
-                         value={diagnosisDetails}
-                         onChange={(e) => setDiagnosisDetails(e.target.value)}
-                         rows={4}
-                         className="w-full text-xs p-3 bg-background/50 border border-border/50 rounded-xl outline-none focus:ring-2 ring-primary/10 text-foreground transition-all resize-none placeholder:italic placeholder:text-muted-foreground/50"
-                         placeholder={tx("initialDiagnosisPlaceholder", lang)}
-                       />
-                       <p className="text-[10px] text-muted-foreground mt-1.5 font-medium">
-                         Leave blank to auto-compile from EMR records.
-                       </p>
-                    </div>
-                    <Button
-                      className="w-full h-10 text-xs font-black uppercase tracking-widest bg-primary hover:bg-primary/90 text-white rounded-xl shadow-lg shadow-primary/20"
-                      onClick={() => diagnosisMutation.mutate(diagnosisDetails)}
-                      disabled={diagnosisMutation.isPending}
-                    >
-                      {diagnosisMutation.isPending ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                          {tx("generatingSuggestions", lang)}
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-4 h-4 mr-2" />
-                          {tx("generateSuggestions", lang)}
-                        </>
-                      )}
-                    </Button>
-
-                    {parsedReport && (
-                      <ClinicalReportView
-                        report={parsedReport}
-                        onApply={handleApplyToPlan}
-                        lang={lang}
-                      />
-                    )}
-                 </div>
+                 <p className="text-sm text-foreground/70 leading-relaxed font-medium">
+                    {lang === "ar"
+                      ? "استخدم المساعد السريري المتقدم للحصول على مقترحات الرموز الطبية ICD-10 وتحليل السجلات الطبية للمريض."
+                      : "Access advanced clinical decision support to generate diagnosis suggestions, review reasoning traces, and verify ICD-10 medical codes."}
+                 </p>
+                 <Button
+                   className="w-full h-12 text-sm font-black uppercase tracking-widest bg-gradient-to-r from-amber-600 to-primary hover:from-amber-700 hover:to-primary/95 text-white rounded-xl shadow-md shadow-primary/10 hover:shadow-lg hover:shadow-primary/20 transition-all flex items-center justify-center gap-2"
+                   onClick={() => setAiConsentOpen(true)}
+                 >
+                   <Sparkles className="w-4 h-4 text-amber-300" />
+                   {lang === "ar" ? "افتح مساعد التشخيص الذكي" : "Open AI Diagnostic Assistant"}
+                 </Button>
               </div>
            </div>
         </div>
@@ -971,6 +704,206 @@ export default function PatientEMRPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog 
+        open={aiConsentOpen} 
+        onOpenChange={(open) => {
+          setAiConsentOpen(open);
+          if (!open) {
+            setAiConsentDisclaimerChecked(false);
+            setAiConsentPatientChecked(false);
+          }
+        }}
+      >
+        <AlertDialogContent className="bg-white border-primary/20 rounded-3xl max-w-2xl p-8">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-primary flex items-center gap-3 text-xl font-black uppercase tracking-tight">
+              <Sparkles className="w-7 h-7 text-amber-500" /> AI Diagnostic Assistant Terms & Consent
+            </AlertDialogTitle>
+            <AlertDialogDescription className="flex flex-col gap-5 mt-6 text-left">
+              <div className="p-5 bg-amber-50 border-2 border-amber-200 rounded-2xl flex items-start gap-4">
+                <Checkbox
+                  id="disclaimer-check"
+                  checked={aiConsentDisclaimerChecked}
+                  onCheckedChange={(c) => setAiConsentDisclaimerChecked(c === true)}
+                  className="mt-1 w-5 h-5 shrink-0"
+                />
+                <div className="text-base text-amber-800">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle className="w-5 h-5" />
+                    <strong className="text-base">Medical Disclaimer</strong>
+                  </div>
+                  <p className="leading-relaxed">
+                    I acknowledge that AI systems can make mistakes. This tool is for diagnostic assistance only, and further clinical investigation by a licensed physician is always necessary. <strong>I will not use this tool for medical emergencies.</strong>
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-5 bg-blue-50 border-2 border-blue-200 rounded-2xl flex items-start gap-4">
+                <Checkbox
+                  id="patient-consent-check"
+                  checked={aiConsentPatientChecked}
+                  onCheckedChange={(c) => setAiConsentPatientChecked(c === true)}
+                  className="mt-1 w-5 h-5 shrink-0"
+                />
+                <div className="text-base text-blue-800">
+                  <div className="flex items-center gap-2 mb-2">
+                    <UserRound className="w-5 h-5" />
+                    <strong className="text-base">Patient Consent Required</strong>
+                  </div>
+                  <p className="leading-relaxed">
+                    I legally confirm that the patient has been informed and has provided explicit consent for their medical records to be analyzed by the AI Diagnostic Assistant.
+                  </p>
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-6 gap-3">
+            <AlertDialogCancel className="rounded-full px-8 h-12 text-base text-muted-foreground font-bold border-border/50">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!aiConsentDisclaimerChecked || !aiConsentPatientChecked}
+              onClick={() => { setAiConsentOpen(false); navigate(`/patients/emr/${patientId}/diagnosis`); }}
+              className="bg-primary hover:bg-primary/90 text-white font-bold rounded-full px-10 h-12 text-base gap-2 disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-5 h-5" /> Accept & Proceed
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={diagnosisToDelete !== null} onOpenChange={(open) => !open && setDiagnosisToDelete(null)}>
+        <AlertDialogContent className="bg-white border-primary/20 rounded-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-primary flex items-center gap-3 font-black uppercase tracking-tight"><Trash2 className="w-5 h-5 text-destructive" /> Delete Diagnosis</AlertDialogTitle>
+            <AlertDialogDescription className="text-foreground/70 font-medium">Are you sure you want to delete this diagnosis? This action cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-4">
+            <AlertDialogCancel className="rounded-full px-6">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => diagnosisToDelete && deleteDiagMutation.mutate(diagnosisToDelete)} className="bg-destructive hover:bg-destructive/90 text-white font-bold rounded-full px-8">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Manual Diagnosis Modal */}
+      {isAddDiagnosisModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+          <div className="bg-card w-full max-w-4xl rounded-3xl shadow-2xl border border-border/60 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-8 py-6 border-b border-border/60 bg-muted/30 flex items-center justify-between">
+              <h3 className="text-sm font-black uppercase tracking-[0.2em] text-primary flex items-center gap-3">
+                <Stethoscope className="w-5 h-5" /> {tx("manualDiagnosis", lang) || "Manual Diagnosis"}
+              </h3>
+              <button onClick={() => setIsAddDiagnosisModalOpen(false)} className="p-2 rounded-xl hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-8">
+                <div className="flex gap-4 mb-6 relative">
+                   <div className="w-full relative">
+                      <label className="text-xs uppercase font-black tracking-widest text-muted-foreground/80 mb-2 block">Search ICD-10 Code</label>
+                      {!newDiagCode && (
+                        <>
+                          <div className="relative shadow-sm rounded-xl overflow-hidden">
+                             <input 
+                               type="text" 
+                               className="w-full h-14 rounded-xl border border-border bg-background px-5 text-base font-medium outline-none focus:ring-2 focus:ring-primary/20 transition-all" 
+                               placeholder="Search diagnosis e.g. hypertension..." 
+                               value={icdSearchTerm} 
+                               onChange={e => {
+                                 setIcdSearchTerm(e.target.value);
+                                 setShowIcdDropdown(true);
+                               }}
+                               onFocus={() => setShowIcdDropdown(true)}
+                             />
+                             {isSearchingIcd && <Loader2 className="absolute right-5 top-4 w-6 h-6 animate-spin text-primary" />}
+                          </div>
+                          {showIcdDropdown && icdSearchTerm.length >= 2 && (
+                            <div className="absolute z-50 w-full mt-2 bg-card border border-border rounded-xl shadow-2xl max-h-80 overflow-y-auto">
+                              {icdSearchResults.length > 0 ? (
+                                <table className="w-full text-left text-sm bg-background">
+                                  <thead className="bg-background sticky top-0 z-10 border-b border-border text-xs uppercase tracking-wider text-muted-foreground shadow-sm">
+                                    <tr>
+                                      <th className="px-5 py-4 font-black w-32">Code</th>
+                                      <th className="px-5 py-4 font-black w-1/3">Name</th>
+                                      <th className="px-5 py-4 font-black">Description</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-border/30">
+                                    {icdSearchResults.map((res, i) => (
+                                      <tr key={i} className="hover:bg-primary/5 cursor-pointer transition-colors" onClick={() => {
+                                        setNewDiagCode(res.code);
+                                        setNewDiagTitle(res.title);
+                                        setIcdSearchTerm(`${res.code} - ${res.title}`);
+                                        setShowIcdDropdown(false);
+                                      }}>
+                                        <td className="px-5 py-4 font-black text-primary border-r border-border/20">{res.code}</td>
+                                        <td className="px-5 py-4 font-bold text-foreground border-r border-border/20">{res.title}</td>
+                                        <td className="px-5 py-4 text-muted-foreground">{res.description || res.title}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              ) : (
+                                !isSearchingIcd && <div className="px-5 py-4 text-sm font-medium text-muted-foreground bg-background">No results found.</div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                   </div>
+                </div>
+                
+                {newDiagCode && newDiagTitle && (
+                   <div className="flex gap-4 mb-8 p-4 bg-primary/5 rounded-xl border border-primary/20 items-center shadow-sm">
+                      <div className="bg-white text-primary px-4 py-2 rounded-lg text-sm font-black uppercase tracking-wider shadow-sm border border-primary/10">{newDiagCode}</div>
+                      <div className="text-base font-bold text-foreground flex-1">{newDiagTitle}</div>
+                      <button onClick={() => { setNewDiagCode(""); setNewDiagTitle(""); setIcdSearchTerm(""); }} className="p-2 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"><X className="w-5 h-5"/></button>
+                   </div>
+                )}
+
+                <div className="mb-8">
+                   <label className="text-xs uppercase font-black tracking-widest text-muted-foreground/80 mb-2 block">Clinical Notes</label>
+                   <textarea className="w-full p-5 text-base font-medium rounded-xl border border-border bg-background min-h-[140px] outline-none focus:ring-2 focus:ring-primary/20 transition-all shadow-sm" placeholder="Type clinical notes here..." value={newDiagNotes} onChange={e => setNewDiagNotes(e.target.value)} />
+                </div>
+
+               <div className="flex justify-end gap-4 pt-4 border-t border-border/50">
+                  <Button size="lg" variant="ghost" className="font-bold px-8 text-muted-foreground" onClick={() => setIsAddDiagnosisModalOpen(false)}>Cancel</Button>
+                  <Button size="lg" className="font-black px-10 text-white shadow-lg shadow-primary/20" onClick={() => addDiagnosisMutation.mutate({ icd_code: newDiagCode, icd_title: newDiagTitle, notes: newDiagNotes, is_ai_generated: false, status: "Active" })} disabled={!newDiagCode || !newDiagTitle || addDiagnosisMutation.isPending}>
+                     {addDiagnosisMutation.isPending ? <Loader2 className="w-5 h-5 animate-spin mr-2" /> : null}
+                     Save Diagnosis
+                  </Button>
+               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Notes Modal */}
+      {viewingDiagnosisNotes !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+          <div className="bg-card w-full max-w-4xl max-h-[90vh] flex flex-col rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="px-8 py-6 border-b border-slate-200 bg-slate-50/50 flex items-center justify-between">
+              <h3 className="text-sm font-black uppercase tracking-[0.2em] text-slate-700 flex items-center gap-3">
+                <CheckCircle2 className="w-5 h-5 text-slate-500" /> Clinical Notes: {viewingDiagnosisNotes.title}
+              </h3>
+              <button onClick={() => setViewingDiagnosisNotes(null)} className="p-2 rounded-xl hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-8 overflow-y-auto custom-scrollbar flex-1 bg-background">
+              <div className="whitespace-pre-wrap text-sm font-medium leading-relaxed text-foreground/80 space-y-6">
+                {viewingDiagnosisNotes.notes}
+              </div>
+            </div>
+            <div className="flex justify-end gap-4 p-6 border-t border-border/50 bg-muted/20">
+               <Button size="lg" className="font-black px-10 text-white bg-slate-600 hover:bg-slate-700 shadow-lg shadow-slate-600/20" onClick={() => setViewingDiagnosisNotes(null)}>
+                  Close
+               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </DashboardLayout>
+
   );
 }

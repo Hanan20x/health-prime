@@ -4,12 +4,12 @@ export const getApiBase = () =>
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") || "/api";
 
 export function getToken(): string | null {
-  return localStorage.getItem(STORAGE_KEY);
+  return sessionStorage.getItem(STORAGE_KEY);
 }
 
 export function setToken(token: string | null) {
-  if (token) localStorage.setItem(STORAGE_KEY, token);
-  else localStorage.removeItem(STORAGE_KEY);
+  if (token) sessionStorage.setItem(STORAGE_KEY, token);
+  else sessionStorage.removeItem(STORAGE_KEY);
 }
 
 export class ApiError extends Error {

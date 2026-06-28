@@ -12,6 +12,8 @@ langchain-google-genai>=1.0.0
 langchain>=0.2.0
 langchain-groq>=0.1.15
 
+pyotp
+qrcode
 pypdf
 faiss-cpu
 sentence-transformers

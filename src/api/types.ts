@@ -3,6 +3,7 @@ export interface UserOut {
   fullName: string;
   role: string;
   avatarUrl?: string;
+  totpEnabled?: boolean;
 }
 
 export interface AuthResponse {
@@ -10,6 +11,7 @@ export interface AuthResponse {
   tokenType: string;
   user?: { email: string; fullName: string; role: string; avatarUrl?: string } | null;
   requiresOtp?: boolean;
+  otpMethod?: "email" | "totp" | null;
 }
 
 export interface PatientListItem {
