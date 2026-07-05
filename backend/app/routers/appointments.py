@@ -310,7 +310,12 @@ def get_medical_data(state: AgentState):
         recent_orders = ", ".join([o.description for o in orders if (datetime.date.today() - o.order_date).days < 30])
             
         medical_history = f"Patient: {pat.first_name} {pat.family_name}, Age: {(datetime.date.today() - pat.dob).days // 365}. "
-        medical_history += f"Registered GP ID: {pat.attending_provider_id}. "
+        if pat.attending_provider_id:
+            gp = db.get(Provider, pat.attending_provider_id)
+            gp_name = gp.full_name if gp else "Unknown"
+            medical_history += f"Registered GP: {gp_name} (ID: {pat.attending_provider_id}). "
+        else:
+            medical_history += "Registered GP: None. "
         if emr_text:
             medical_history += f"EMR Context: {emr_text}. "
         if recent_orders:
@@ -357,6 +362,7 @@ PRIORITY TIERS & SLA
 CRITICAL: You are restricted to ONLY "Routine", "Soon", or "Urgent" for final_priority.
 
 STEP 1 - EMERGENCY SCREEN
+If reason_text is empty or blank, you MUST raise a flag of type "confirm_info" with severity "medium" asking the staff to provide a reason for the visit.
 If there are red flags (chest pain, FAST signs, severe breathing, major bleeding/trauma, unconscious): Set emergency_route = true. Set final_priority = "Urgent".
 
 STEP 2 - URGENCY CLASSIFICATION
@@ -369,7 +375,8 @@ If AI suggests equal or lower urgency: set final_priority = user_selected_priori
 
 STEP 4 - DOCTOR ASSIGNMENT
 candidates = doctors from available_doctors
-CRITICAL RULE: Look at user_selected_provider. If the role in the string says "Nurse", and this is an "ER Visit" or "Urgent" priority or reason_text contains severe/emergency keywords:
+CRITICAL RULE 1: If user_selected_provider contains "Unknown" and the patient has a "Registered GP" listed in their medical history, you MUST set provider_action="REASSIGN", set recommended_provider to their Registered GP, and FLAG(continuity_overridden, severity=low) explaining that booking with their registered GP ensures continuity of care.
+CRITICAL RULE 2: Look at user_selected_provider. If the role in the string EXACTLY says "Nurse", and this is an "ER Visit" or "Urgent" priority or reason_text contains severe/emergency keywords:
 Then you MUST set provider_action="REASSIGN", set recommended_provider to the EXACT name of a DOCTOR from available_doctors (do not invent a role like "Emergency Department Physician", use an exact name from the list), and FLAG(slot_or_fit_conflict, severity=high) explaining that a Nurse cannot independently manage an emergent case.
 HOWEVER, if user_selected_provider already has the role "Doctor", YOU MUST KEEP IT (provider_action="KEEP", recommended_provider=user_selected_provider) unless they are strictly incompatible. Do not claim a Doctor is a Nurse.
 
@@ -468,11 +475,11 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             prov_role = prov.role
             
     active_doctors = db.query(Provider).filter(Provider.role == 'Doctor').all()
-    doctors_list = ", ".join([f"{d.full_name} ({d.specialty})" for d in active_doctors])
+    doctors_list = ", ".join([f"{d.full_name} (ID: {d.id}, Specialty: {d.specialty})" for d in active_doctors])
         
     staff_entry = {
         "Priority": req.priority_level,
-        "Doctor": f"{prov_name} (Role: {prov_role}, Specialty: {prov_specialty})",
+        "Doctor": f"{prov_name} (ID: {req.provider_id}, Role: {prov_role}, Specialty: {prov_specialty})",
         "Date": req.appointment_date,
         "Time": req.time_str,
         "Reason": req.reason,
@@ -735,6 +742,10 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
     ]
     
     ai_exp = ai_response.get("nurse_summary") or "AI Review completed."
+    for f in flags:
+        if f.get("type") == "confirm_info" and f.get("explanation"):
+            ai_exp = f"{ai_exp} WARNING: {f.get('explanation')}"
+            
     if manual_slots_affected:
         ai_exp += f" ({manual_slots_affected})"
 
@@ -898,28 +909,14 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, _user: CurrentUser
             date_obj = date_obj.replace(hour=10, minute=0, second=0, microsecond=0)
         date_obj = clamp_to_business_hours(date_obj)
 
-        # Conflict check and slot shifting logic
-        if prov:
-            attempts = 0
-            while attempts < 20:
-                half = SLOT_DURATION_MIN - 1
-                start_win = date_obj - timedelta(minutes=half)
-                end_win = date_obj + timedelta(minutes=half)
-                
-                # Check DB for conflicts
-                conflicts = db.query(Appointment).filter(
-                    Appointment.provider_id == prov.id,
-                    Appointment.appointment_date >= start_win,
-                    Appointment.appointment_date <= end_win,
-                    Appointment.status.in_(["Scheduled", "Confirmed", "Booked", "Completed"])
-                ).all()
-                
-                if not conflicts:
-                    break
-                    
-                # Shift forward by SLOT_DURATION_MIN
-                date_obj += timedelta(minutes=SLOT_DURATION_MIN)
-                attempts += 1
+        # NOTE: conflict detection and slot shifting for this newly generated slot is
+        # handled by the single, documented conflict-check loop further below (the one
+        # that also builds the human-readable manual_slots_affected explanation). An
+        # earlier, undocumented loop used to duplicate this check here and silently
+        # resolve the conflict before the documented loop ran, which caused the
+        # explanation text to incorrectly report "No conflicts detected" even when a
+        # conflict had just been avoided (see test_conflict_api.py). That redundant
+        # loop has been removed.
 
         prov_name = prov.full_name if prov else "Any"
         optimization_diffs_data = [
