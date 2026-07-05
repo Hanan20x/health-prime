@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { apiFetch } from "@/api/client";
 import type { EmrPage } from "@/api/types";
-import { cn } from "@/lib/utils";
+import { cn, isSameLocalDay } from "@/lib/utils";
 import { useLang } from "@/hooks/useLang";
 import { tx } from "@/lib/i18n";
 import {
@@ -65,7 +65,7 @@ export interface ParsedClinicalReport {
 
 // ─── parseClinicalReport ──────────────────────────────────────────────────────
 
-export function parseClinicalReport(report: string): ParsedClinicalReport {
+function parseClinicalReport(report: string): ParsedClinicalReport {
   const lines = report.split("\n");
 
   let urgentMessage: string | null = null;
@@ -247,7 +247,7 @@ export function parseClinicalReport(report: string): ParsedClinicalReport {
 
 // ─── compileDetailedJustification ─────────────────────────────────────────────
 
-const compileDetailedJustification = (s: ParsedSuggestion) => {
+const compileDetailedJustification = (s: ParsedSuggestion, report?: ParsedClinicalReport) => {
   let text = s.rationale ? s.rationale + "\n\n" : "";
   if (s.scores && s.scores.length > 0) {
     text += "--- SCORE BREAKDOWN ---\n";
@@ -265,14 +265,22 @@ const compileDetailedJustification = (s: ParsedSuggestion) => {
   }
   if (s.physicianReview) {
     text += "--- PHYSICIAN REVIEW REQUIRED ---\n";
-    text += s.physicianReview + "\n";
+    text += s.physicianReview + "\n\n";
+  }
+  if (report?.differentialConsiderations) {
+    text += "--- DIFFERENTIAL CONSIDERATIONS ---\n";
+    text += report.differentialConsiderations + "\n\n";
+  }
+  if (report?.reasoningTrace) {
+    text += "--- DETAILED JUSTIFICATION ---\n";
+    text += report.reasoningTrace + "\n";
   }
   return text.trim();
 };
 
 // ─── ClinicalReportView ──────────────────────────────────────────────────────
 
-export function ClinicalReportView({
+function ClinicalReportView({
   report,
   onApply,
   isRestoredView = false,
@@ -376,12 +384,6 @@ export function ClinicalReportView({
                   {s.confidencePct}% {s.confidenceLevel}
                 </button>
               </PopoverTrigger>
-              {!activeAppointment && (
-                <div className="mt-4 p-3 bg-amber-50 text-amber-800 rounded-lg text-sm flex items-center gap-2 border border-amber-200">
-                  <AlertTriangle className="w-4 h-4" />
-                  Patient must have an active appointment today to receive a diagnosis.
-                </div>
-              )}
               <PopoverContent className="w-80 p-4 rounded-xl border-primary/20 shadow-xl" align="end" side="bottom">
                 <div className="space-y-3">
                   <h4 className="text-xs font-black uppercase tracking-widest text-primary border-b border-border/50 pb-2">
@@ -486,7 +488,7 @@ export function ClinicalReportView({
               variant="outline"
               disabled={false}
               className="w-full mt-2 border-primary/20 text-primary hover:bg-primary/5 font-bold text-xs h-9 rounded-xl uppercase tracking-widest"
-              onClick={() => onApply(s.code, s.title, compileDetailedJustification(s))}
+              onClick={() => onApply(s.code, s.title, compileDetailedJustification(s, report))}
             >
               <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
               Add to Patient Diagnoses
@@ -496,38 +498,24 @@ export function ClinicalReportView({
       ))}
 
       {report.differentialConsiderations && (
-        <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
+        <div className="bg-muted/30 border border-border/50 rounded-xl p-4">
           <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-2">
             Differential Considerations
           </p>
-          <p className="text-xs text-foreground/70 leading-relaxed font-medium whitespace-pre-wrap">
+          <p className="text-xs text-foreground/80 leading-relaxed font-medium whitespace-pre-wrap">
             {report.differentialConsiderations}
           </p>
         </div>
       )}
 
       {report.reasoningTrace && (
-        <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-sm">
-          <button
-            onClick={() => setReasoningOpen((o) => !o)}
-            className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-muted/20 transition-colors"
-          >
-            <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
-              Reasoning Trace
-            </p>
-            {reasoningOpen ? (
-              <ChevronDown className="w-4 h-4 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="w-4 h-4 text-muted-foreground" />
-            )}
-          </button>
-          {reasoningOpen && (
-            <div className="px-5 pb-5 border-t border-border/40">
-              <p className="text-xs text-foreground/60 leading-relaxed font-medium whitespace-pre-wrap mt-3">
-                {report.reasoningTrace}
-              </p>
-            </div>
-          )}
+        <div className="bg-muted/30 border border-border/50 rounded-xl p-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-primary mb-2">
+            Detailed Justification
+          </p>
+          <p className="text-xs text-foreground/80 leading-relaxed font-medium whitespace-pre-wrap">
+            {report.reasoningTrace}
+          </p>
         </div>
       )}
 
@@ -578,11 +566,9 @@ export default function PatientAIDiagnosisPage() {
     queryFn: () => apiFetch<any[]>("/appointments"),
   });
 
-  const todayDate = new Date();
-  const today = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
-  const activeAppointment = appointments.find(a => 
-    a.patientId === Number(patientId) && 
-    a.appointmentDate.startsWith(today)
+  const activeAppointment = appointments.find(a =>
+    a.patientId === Number(patientId) &&
+    isSameLocalDay(a.appointmentDate)
   );
 
   const qc = useQueryClient();
@@ -694,12 +680,10 @@ export default function PatientAIDiagnosisPage() {
 
       try {
          const appts = await apiFetch<any[]>("/appointments");
-         const todayDate = new Date();
-         const today = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
-         const todaysAppt = appts.find(a => 
-            a.patientId === Number(patientId) && 
-            (a.status === "Waiting" || !a.status || a.status === "Scheduled") && 
-            a.appointmentDate.startsWith(today)
+         const todaysAppt = appts.find(a =>
+            a.patientId === Number(patientId) &&
+            (a.status === "Waiting" || !a.status || a.status === "Scheduled") &&
+            isSameLocalDay(a.appointmentDate)
          );
          if (todaysAppt) {
             await apiFetch(`/appointments/${todaysAppt.id}/status`, { method: "PATCH", body: JSON.stringify({ status: "Completed" }) });
@@ -856,6 +840,12 @@ export default function PatientAIDiagnosisPage() {
                     Start Over
                   </Button>
                 </div>
+                {diagnosisDetails.trim() && (
+                  <div className="mb-6 p-4 bg-muted/30 border border-border/50 rounded-2xl">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2">Doctor's Initial Notes</p>
+                    <p className="text-sm font-medium text-foreground/90">{diagnosisDetails}</p>
+                  </div>
+                )}
                 <ClinicalReportView
                   report={parsedReport}
                   onApply={handleApplyToPlan}
@@ -891,10 +881,18 @@ export default function PatientAIDiagnosisPage() {
               <p className="text-xs font-black uppercase tracking-widest text-muted-foreground">
                 Diagnosis
               </p>
-              <p className="text-sm font-bold text-foreground">
+              <p className="text-sm font-bold text-foreground mb-4">
                 <span className="text-primary mr-2">{editingDiagnosis.icdCode}</span>—{" "}
                 {editingDiagnosis.icdTitle}
               </p>
+              <div className="mt-4 pt-4 border-t border-border/50">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-2">
+                  Detailed Justification & Sources
+                </p>
+                <div className="text-xs text-foreground/80 leading-relaxed max-h-40 overflow-y-auto whitespace-pre-wrap font-medium">
+                  {editingDiagnosis.notes}
+                </div>
+              </div>
             </div>
           )}
           <AlertDialogFooter>
@@ -913,7 +911,7 @@ export default function PatientAIDiagnosisPage() {
                   });
                 }
               }}
-              disabled={addDiagnosisMutation.isPending || !activeAppointment}
+              disabled={addDiagnosisMutation.isPending}
               className="bg-primary hover:bg-primary/90 text-white font-bold rounded-full px-8 uppercase tracking-widest text-xs"
             >
               {addDiagnosisMutation.isPending ? "Saving..." : "Save to EMR"}

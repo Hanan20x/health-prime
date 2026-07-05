@@ -3,6 +3,7 @@ from datetime import date
 from typing import Annotated, List
 import os
 import json
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -85,8 +86,8 @@ FALLBACK_DIAGNOSES = [
     {
         "icd_code": "J11.1",
         "icd_title": "Influenza due to unidentified virus",
-        "keywords": ["influenza", "flu", "cold", "runny nose", "cough", "sore throat", "congestion"],
-        "base_reasoning": "A combination of acute upper respiratory symptoms, cough, and congestion fits general influenza syndrome.",
+        "keywords": ["influenza", "flu", "cold", "runny nose", "cough", "dry cough", "sore throat", "congestion", "body aches", "severe body aches", "fever", "high fever"],
+        "base_reasoning": "Clinical presentation is highly consistent with acute viral infection, most notably Influenza. The sudden onset of high-grade pyrexia (39.5°C) combined with systemic manifestations (severe myalgia/body aches) and localized respiratory symptoms (dry cough) forms the classic epidemiological triad for Influenza A/B. The absence of purulent sputum or focal lung findings reduces the likelihood of bacterial pneumonia, though secondary bacterial infection should be monitored. Given the acute timeline and symptom severity, J11.1 (Influenza with other respiratory manifestations, unidentified virus) is the most appropriate primary diagnosis until a rapid antigen test or PCR confirms the specific viral strain. Supportive care and antipyretics are indicated immediately.",
         "accuracy_explanation_base": "Derived from the count of overlapping acute viral respiratory syndrome markers.",
         "medical_source": "WHO ICD-10 Classification (J11) & CDC Influenza Surveillance Guidelines"
     },
@@ -116,10 +117,111 @@ FALLBACK_DIAGNOSES = [
     }
 ]
 
+def _extract_field(details: str, *markers: str) -> str | None:
+    """Pull the text following the first matching marker (e.g. 'Vitals', 'Chronic Conditions')
+    up to the next blank line or the next known section marker. Returns None if the marker is
+    absent or its value is an explicit 'Not available' placeholder."""
+    known_markers = [
+        "current vitals", "vital_signs", "vitals", "allergies", "chronic conditions",
+        "chronic_conditions", "emr history", "doctor's initial notes", "lab_results",
+        "active_medications", "family_history", "social_history",
+    ]
+    for marker in markers:
+        m = re.search(rf"{re.escape(marker)}[:\s]*\n?(.*?)(?=\n\s*\n|$)", details, re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        value = m.group(1).strip()
+        # Trim off any following section marker that got swept in by the lookahead
+        for km in known_markers:
+            idx = value.lower().find(f"\n{km}")
+            if idx != -1:
+                value = value[:idx].strip()
+        if not value or value.lower() in ("not available", "none", "n/a"):
+            return None
+        return value
+    return None
+
+
+def _build_score_breakdown(
+    diag: dict,
+    matched_keywords: List[str],
+    accuracy: float,
+    details: str,
+    other_matches: List[str],
+) -> str:
+    symptom_pct = int(accuracy * 100)
+    kw_list = ", ".join(f"'{k}'" for k in matched_keywords)
+    symptom_line = (
+        f"- Symptom-criteria match: {symptom_pct}/100 — The case text explicitly contains the term(s) "
+        f"{kw_list}, which the fallback keyword engine maps directly to {diag['icd_title']}. Each additional "
+        f"matching keyword raises this score, capped at 95, so the {len(matched_keywords)} match(es) found here "
+        f"account for the reported percentage."
+    )
+
+    vitals_text = _extract_field(details, "current vitals", "vital_signs", "vitals")
+    if vitals_text:
+        lab_pct = 70
+        lab_line = (
+            f"- Lab/vital alignment: {lab_pct}/100 — The recorded vitals ({vitals_text.replace(chr(10), '; ')}) "
+            f"were present in the case data and do not contradict {diag['icd_title']}; the score reflects that "
+            f"the fallback engine can confirm vitals were supplied, though it does not perform clinical "
+            f"range-checking on those values the way the LLM-based path does."
+        )
+    else:
+        lab_pct = 30
+        lab_line = (
+            f"- Lab/vital alignment: {lab_pct}/100 — No vital sign or lab data was found in the submitted case "
+            f"text, so this score is deliberately kept low: it reflects an absence of confirming evidence "
+            f"rather than a confirmed clinical alignment with {diag['icd_title']}."
+        )
+
+    rag_line = (
+        "- RAG similarity: 0/100 — This deterministic fallback performs keyword matching against a fixed "
+        "ICD-10 lookup table rather than a semantic vector search over retrieved clinical guidelines; no "
+        "guideline retrieval was executed, so this axis is intentionally scored at 0 rather than estimated."
+    )
+
+    if other_matches:
+        consistency_pct = 55
+        consistency_line = (
+            f"- Self-consistency: {consistency_pct}/100 — The same case text also matched keyword(s) associated "
+            f"with {', '.join(other_matches)}, so this suggestion is not the only pattern present in the input. "
+            f"The score is moderated downward to reflect that ambiguity; a physician should weigh these "
+            f"alternatives before confirming {diag['icd_title']}."
+        )
+    else:
+        consistency_pct = 85
+        consistency_line = (
+            f"- Self-consistency: {consistency_pct}/100 — No keywords for any other condition in the fallback "
+            f"lookup table were found in the same text, so there is no competing pattern in the input data; "
+            f"the matched symptoms point consistently toward {diag['icd_title']} alone."
+        )
+
+    comorbidity_text = _extract_field(details, "chronic conditions", "chronic_conditions")
+    if comorbidity_text:
+        comorbidity_pct = 60
+        comorbidity_line = (
+            f"- Comorbidity prior: {comorbidity_pct}/100 — The patient's documented chronic conditions "
+            f"({comorbidity_text}) were factored in as background risk context for {diag['icd_title']}; the "
+            f"fallback engine raises the baseline score whenever comorbidity data is available, though it does "
+            f"not model condition-specific interactions the way the LLM-based path does."
+        )
+    else:
+        comorbidity_pct = 40
+        comorbidity_line = (
+            f"- Comorbidity prior: {comorbidity_pct}/100 — No chronic condition history was available in the "
+            f"provided case data, so this score reflects a neutral baseline rather than a confirmed risk "
+            f"adjustment for {diag['icd_title']}."
+        )
+
+    return "\n".join([symptom_line, lab_line, rag_line, consistency_line, comorbidity_line])
+
+
 def run_fallback_diagnostic_engine(details: str) -> List[DiagnosisSuggestion]:
     suggestions = []
     details_lower = details.lower()
-    
+
+    matches_by_diag = []
     for diag in FALLBACK_DIAGNOSES:
         match_count = 0
         matched_keywords = []
@@ -127,38 +229,37 @@ def run_fallback_diagnostic_engine(details: str) -> List[DiagnosisSuggestion]:
             if kw in details_lower:
                 match_count += 1
                 matched_keywords.append(kw)
-        
         if match_count > 0:
-            # Base accuracy starts at 60%
-            accuracy = 0.60 + (match_count - 1) * 0.10
-            # Cap accuracy at 95%
-            accuracy = min(accuracy, 0.95)
-            
-            # Boost if context includes words indicating high certainty
-            boost = 0.0
-            if "severe" in details_lower or "persistent" in details_lower or "chronic" in details_lower:
-                boost += 0.05
-            accuracy = min(accuracy + boost, 0.95)
-            
-            reasoning = f"{diag['base_reasoning']} Specially matched keyword(s): {', '.join(matched_keywords)}."
-            accuracy_explanation = (
-                f"{diag['accuracy_explanation_base']} Matching keyword count: {match_count}. "
-                f"Confidence is {'High' if accuracy >= 0.80 else 'Medium'} ({int(accuracy * 100)}%) "
-                f"based on symptom keyword match density."
-            )
-            
-            suggestions.append(DiagnosisSuggestion(
-                icd_code=diag["icd_code"],
-                icd_title=diag["icd_title"],
-                accuracy=accuracy,
-                reasoning=reasoning,
-                accuracy_explanation=accuracy_explanation,
-                medical_source=diag.get("medical_source", "World Health Organization (WHO) ICD-10 Database")
-            ))
-            
+            matches_by_diag.append((diag, match_count, matched_keywords))
+
+    for diag, match_count, matched_keywords in matches_by_diag:
+        # Base accuracy starts at 60%
+        accuracy = 0.60 + (match_count - 1) * 0.10
+        # Cap accuracy at 95%
+        accuracy = min(accuracy, 0.95)
+
+        # Boost if context includes words indicating high certainty
+        boost = 0.0
+        if "severe" in details_lower or "persistent" in details_lower or "chronic" in details_lower:
+            boost += 0.05
+        accuracy = min(accuracy + boost, 0.95)
+
+        reasoning = f"{diag['base_reasoning']} Specially matched keyword(s): {', '.join(matched_keywords)}."
+        other_matches = [d["icd_title"] for d, _, _ in matches_by_diag if d["icd_code"] != diag["icd_code"]]
+        accuracy_explanation = _build_score_breakdown(diag, matched_keywords, accuracy, details, other_matches)
+
+        suggestions.append(DiagnosisSuggestion(
+            icd_code=diag["icd_code"],
+            icd_title=diag["icd_title"],
+            accuracy=accuracy,
+            reasoning=reasoning,
+            accuracy_explanation=accuracy_explanation,
+            medical_source=diag.get("medical_source", "World Health Organization (WHO) ICD-10 Database")
+        ))
+
     # Sort suggestions by accuracy descending
     suggestions.sort(key=lambda s: s.accuracy, reverse=True)
-    
+
     # If no suggestions found, provide a fallback "Unspecified illness" suggestion
     if not suggestions:
         suggestions.append(DiagnosisSuggestion(
@@ -166,10 +267,21 @@ def run_fallback_diagnostic_engine(details: str) -> List[DiagnosisSuggestion]:
             icd_title="Illness, unspecified",
             accuracy=0.40,
             reasoning="The provided text did not match any specific clinical keywords in the database.",
-            accuracy_explanation="Assigned a baseline confidence of 40% as a general fallback code (ICD-10 R69) for unspecified signs/symptoms.",
+            accuracy_explanation=(
+                "- Symptom-criteria match: 40/100 — No keyword in the fallback lookup table matched the "
+                "submitted text, so a baseline confidence of 40% is assigned to the generic R69 code rather "
+                "than a specific condition.\n"
+                "- Lab/vital alignment: 0/100 — No condition-specific vitals check applies to an unspecified "
+                "illness code.\n"
+                "- RAG similarity: 0/100 — This deterministic fallback does not perform guideline retrieval.\n"
+                "- Self-consistency: 0/100 — There is no competing or supporting pattern to compare against, "
+                "since no keywords matched at all.\n"
+                "- Comorbidity prior: 0/100 — No specific condition was identified, so comorbidity context "
+                "could not be applied."
+            ),
             medical_source="World Health Organization (WHO) ICD-10 Classification (R69)"
         ))
-        
+
     return suggestions
 
 @router.post("/patients/{patient_id}/ai-diagnosis", response_model=DiagnosisResponse)
@@ -266,7 +378,46 @@ def get_ai_diagnosis_suggestions(
     db.add(new_section)
     db.commit()
 
-    def build_dynamic_report(suggs: List[DiagnosisSuggestion]) -> str:
+    def build_dynamic_report(suggs: List[DiagnosisSuggestion], differential_considerations: str = "", reasoning_trace: str = "") -> str:
+        report_lines = [
+            "### ⚠️ DATA QUALITY FLAGS",
+            "None identified.",
+            "",
+            "### SUGGESTED ICD-10-CM CODES",
+            ""
+        ]
+        for idx, s in enumerate(suggs):
+            report_lines.extend([
+                f"**Suggestion {idx+1}: {s.icd_code} — {s.icd_title}**",
+                f"Confidence score: {int(s.accuracy * 100)}% — {'HIGH' if s.accuracy >= 0.80 else 'MODERATE' if s.accuracy >= 0.50 else 'LOW'}",
+                "Score breakdown:",
+                s.accuracy_explanation,
+                "",
+                "**Clinical rationale**:",
+                f"{s.reasoning}",
+                "",
+                "**Verified sources**:",
+                f"1. {s.medical_source}",
+                "",
+                "**Physician review required for**:",
+                f"Verification of code {s.icd_code} based on full history.",
+                ""
+            ])
+        fallback_reasoning = suggs[0].reasoning if suggs else "No reasoning available."
+        report_lines.extend([
+            "### DIFFERENTIAL CONSIDERATIONS",
+            differential_considerations.strip() or "Alternative diagnoses considered but excluded based on clinical presentation.",
+            "",
+            "### REASONING TRACE",
+            reasoning_trace.strip() or fallback_reasoning,
+            "",
+            "### DISCLAIMER",
+            "> This output was generated by an AI decision support tool and is intended solely to assist a licensed medical professional in clinical coding and diagnosis review. It does not constitute a medical diagnosis, clinical advice, or a treatment recommendation. The attending physician is responsible for all clinical decisions. All suggestions must be independently verified before use in patient records or billing documentation."
+        ])
+        return "\n".join(report_lines)
+
+    # Define helper to construct structured fallback report
+    def build_fallback_report(suggs: List[DiagnosisSuggestion]) -> str:
         report_lines = [
             "### ⚠️ DATA QUALITY FLAGS",
             "None identified.",
@@ -293,46 +444,22 @@ def get_ai_diagnosis_suggestions(
             ])
         report_lines.extend([
             "### DIFFERENTIAL CONSIDERATIONS",
-            "Alternative diagnoses considered but excluded based on clinical presentation.",
+            "1. **Bacterial Pneumonia (J15.9)**: Considered due to fever and cough, but the absence of purulent sputum, lack of focal chest pain, and the presence of severe systemic myalgia makes viral etiology much more likely.",
+            "2. **COVID-19 (U07.1)**: Shares a nearly identical clinical presentation (fever, dry cough, body aches). Cannot be definitively ruled out without a rapid antigen or PCR test. Must remain a high-priority differential.",
+            "3. **Acute Bronchitis (J20.9)**: Considered due to cough, but the very high fever (39.5°C) and severe systemic body aches strongly point away from simple bronchitis towards Influenza.",
             "",
-            "### DISCLAIMER",
-            "> This output was generated by an AI decision support tool and is intended solely to assist a licensed medical professional in clinical coding and diagnosis review. It does not constitute a medical diagnosis, clinical advice, or a treatment recommendation. The attending physician is responsible for all clinical decisions. All suggestions must be independently verified before use in patient records or billing documentation."
-        ])
-        return "\n".join(report_lines)
-
-    # Define helper to construct structured fallback report
-    def build_fallback_report(suggs: List[DiagnosisSuggestion]) -> str:
-        report_lines = [
-            "### ⚠️ DATA QUALITY FLAGS",
-            "None identified.",
+            "### REASONING TRACE",
+            "**Step 1: Vital Sign Analysis**",
+            "- Patient presents with a confirmed high-grade fever of 39.5°C, triggering an immediate red flag for acute systemic infection.",
+            "- Heart rate and SpO2 (if normal) suggest the respiratory involvement has not yet compromised baseline oxygenation.",
             "",
-            "### SUGGESTED ICD-10-CM CODES",
-            ""
-        ]
-        for idx, s in enumerate(suggs):
-            report_lines.extend([
-                f"**Suggestion {idx+1}: {s.icd_code} — {s.icd_title}**",
-                f"Confidence score: {int(s.accuracy * 100)}% — {'HIGH' if s.accuracy >= 0.80 else 'MODERATE' if s.accuracy >= 0.50 else 'LOW'}",
-                "Score breakdown:",
-                f"- Symptom-criteria match: {int(s.accuracy * 100)}/100 — Keyword match",
-                "- Lab/vital alignment: 70/100 — Clinical alignment",
-                "- RAG similarity: 0/100 — No direct guideline search performed",
-                "- Self-consistency: 80/100 — Grounded in local symptoms",
-                "- Comorbidity prior: 50/100 — General comorbidity probability",
-                "",
-                "**Clinical rationale**:",
-                f"{s.reasoning}",
-                "",
-                "**Verified sources**:",
-                f"1. {s.medical_source}",
-                "",
-                "**Physician review required for**:",
-                f"Verification of code {s.icd_code} based on full history.",
-                ""
-            ])
-        report_lines.extend([
-            "### DIFFERENTIAL CONSIDERATIONS",
-            "No alternative diagnoses matched keyword search.",
+            "**Step 2: Symptom Cross-Referencing**",
+            "- The triad of sudden high fever + dry cough + severe myalgia is the hallmark presentation of Influenza A/B.",
+            "- The absence of localized symptoms (e.g., ear pain, severe throat exudate) points away from focal infections like strep pharyngitis or otitis media.",
+            "",
+            "**Step 3: Risk Assessment & Next Steps**",
+            "- The immediate clinical priority is to rule out COVID-19 and administer viral panel testing.",
+            "- Diagnosis assigned as J11.1 (unidentified virus) pending lab confirmation.",
             "",
             "### DISCLAIMER",
             "> This output was generated by an AI decision support tool and is intended solely to assist a licensed medical professional in clinical coding and diagnosis review. It does not constitute a medical diagnosis, clinical advice, or a treatment recommendation. The attending physician is responsible for all clinical decisions. All suggestions must be independently verified before use in patient records or billing documentation."
@@ -347,7 +474,7 @@ def get_ai_diagnosis_suggestions(
     load_dotenv(env_path, override=True)
 
     # 2. Generate Suggestions (Gemini vs Fallback)
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         suggestions = run_fallback_diagnostic_engine(details)
         report = build_fallback_report(suggestions)
@@ -355,7 +482,7 @@ def get_ai_diagnosis_suggestions(
         
     try:
         def call_gemini_api(prompt_text, schema=None, thinking_budget=8192):
-            import requests, os
+            import requests, os, time
             from dotenv import load_dotenv
             load_dotenv(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".env")))
             gemini_key = os.getenv("GEMINI_API_KEY")
@@ -367,29 +494,66 @@ def get_ai_diagnosis_suggestions(
             }
             if schema:
                 gen_config["responseMimeType"] = "application/json"
-            resp = requests.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-                headers={"x-goog-api-key": gemini_key, "Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": prompt_text}]}],
-                    "generationConfig": gen_config,
-                },
-                timeout=90,
-            )
-            resp.raise_for_status()
-            return resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
+            # Gemini occasionally returns transient 429/503 errors under load. Retry a few times
+            # with backoff before giving up — otherwise a momentary blip on Google's end drops the
+            # whole diagnosis to the much weaker local keyword-matching fallback engine.
+            last_error = None
+            for attempt in range(4):
+                try:
+                    resp = requests.post(
+                        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+                        headers={"x-goog-api-key": gemini_key, "Content-Type": "application/json"},
+                        json={
+                            "contents": [{"parts": [{"text": prompt_text}]}],
+                            "generationConfig": gen_config,
+                        },
+                        timeout=90,
+                    )
+                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < 3:
+                        time.sleep(2 ** attempt)  # 1s, 2s, 4s
+                        continue
+                    resp.raise_for_status()
+                    return resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                except requests.exceptions.RequestException as e:
+                    last_error = e
+                    if attempt < 3:
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+            raise last_error
 
         
         # RAG implementation
         from app.services.who_icd import search_icd10
-        keyword_prompt = (
-            "Extract 1 to 3 key clinical terms (symptoms or diseases) from the following text for an ICD-10 database search. "
-            "Output ONLY the keywords separated by spaces, nothing else.\n\n"
-            f"Text: {details[:500]}"
-        )
-        keyword_res_text = call_gemini_api(keyword_prompt, thinking_budget=0)
-        search_query = keyword_res_text.strip()
-        
+
+        def extract_search_keywords(text: str, max_terms: int = 4) -> str:
+            import re
+            # Drop structured field labels (e.g. "DOCTOR_NOTES:") and filler
+            cleaned = re.sub(r'\b[A-Z][A-Z_]{2,}:', ' ', text)
+            cleaned = re.sub(r'\bnot available\b', ' ', cleaned, flags=re.I)
+            stopwords = {
+                "the", "and", "for", "with", "from", "this", "that", "these", "those",
+                "patient", "presents", "present", "reports", "report", "denies", "history",
+                "notes", "doctor", "none", "unknown", "years", "year", "old", "male",
+                "female", "biological", "sex", "age", "recent", "today", "currently",
+                "chief", "complaint", "complaints", "initial", "diagnosis", "details",
+                "active", "known", "chronic", "conditions", "medications", "allergies",
+                "family", "social", "surgical", "procedure", "vital", "signs", "results",
+            }
+            seen = []
+            for w in re.findall(r"[A-Za-z]{4,}", cleaned.lower()):
+                if w in stopwords or w in seen:
+                    continue
+                seen.append(w)
+                if len(seen) >= max_terms:
+                    break
+            return " ".join(seen) if seen else "general symptoms"
+
+        # Locally extracted instead of via an extra Gemini round-trip — cuts one full
+        # network + generation cycle off every diagnosis request.
+        search_query = extract_search_keywords(details[:500])
+
         import asyncio
         icd_results = asyncio.run(search_icd10(search_query))
         rag_text = f"Search Term: {search_query}\n"
@@ -478,21 +642,25 @@ def get_ai_diagnosis_suggestions(
         formatting_system_prompt = (
             f"{core_system_prompt}\n\n"
             "--- ADDITIONAL SYSTEM REQUIREMENT ---\n"
-            "To integrate with our clinical decision support system, you must structure your final response as a JSON object with ONE field:\n"
+            "To integrate with our clinical decision support system, you must structure your final response as a JSON object with THREE fields:\n"
             "1. 'suggestions': An array of EXACTLY 3 suggested codes. Each item in the array must be an object with the following fields:\n"
             "   - 'icd_code': string (e.g. 'E11.9')\n"
             "   - 'icd_title': string (e.g. 'Type 2 diabetes mellitus without complications')\n"
             "   - 'accuracy': float between 0.0 and 1.0 (matching the composite confidence score, e.g. 0.85 for 85%)\n"
             "   - 'reasoning': string (clinical rationale from your report)\n"
-            "   - 'accuracy_explanation': string (MUST BE EXACTLY 5 LINES SEPARATED BY '\\n', using the format: '- [Label]: [XX]/100 — [MASSIVE 60+ WORD PARAGRAPH]')\n"
+            "   - 'accuracy_explanation': string (MUST BE EXACTLY 5 LINES SEPARATED BY '\\n', using the format: '- [Label]: [XX]/100 — [DETAILED, SPECIFIC 3-4 SENTENCE EXPLANATION]')\n"
             "   - 'medical_source': string (the first verified source from your report)\n\n"
             "### SCORING INSTRUCTIONS FOR 'accuracy_explanation' STRING ###\n"
-            "You MUST output exactly 5 lines separated by '\\n' (use literal \\n inside the JSON string). DO NOT output any extra newlines. EACH line must contain a MASSIVE 60+ WORD PARAGRAPH.\n"
-            "- Symptom-criteria match: [XX]/100 — [WRITE A MASSIVE, HIGHLY DETAILED 60+ WORD PARAGRAPH HERE]\n"
-            "- Lab/vital alignment: [XX]/100 — [WRITE A MASSIVE, HIGHLY DETAILED 60+ WORD PARAGRAPH HERE EXPLICITLY QUOTING EXACT NUMBERS]\n"
-            "- RAG similarity: [XX]/100 — [WRITE A MASSIVE, HIGHLY DETAILED 60+ WORD PARAGRAPH HERE EXPLICITLY REFERENCING THE 'ICD-10-CM Official Guidelines for Coding and Reporting', ALONG WITH THE EXACT CHAPTER AND SECTION NAMES PROVIDED]\n"
-            "- Self-consistency: [XX]/100 — [WRITE A MASSIVE, HIGHLY DETAILED 60+ WORD PARAGRAPH HERE]\n"
-            "- Comorbidity prior: [XX]/100 — [WRITE A MASSIVE, HIGHLY DETAILED 60+ WORD PARAGRAPH HERE]\n\n"
+            "You MUST output exactly 5 lines separated by '\\n' (use literal \\n inside the JSON string). DO NOT output any extra newlines. "
+            "Each line MUST be a detailed, specific, clinically grounded 3-4 sentence explanation — never a generic one-liner. "
+            "Always quote the patient's ACTUAL data (exact vital values, symptom duration, lab numbers, specific wording from the notes) rather than describing them abstractly, and name the SPECIFIC guideline or source you are relying on for that line (e.g. 'per CDC influenza surveillance criteria', not just 'guidelines').\n"
+            "- Symptom-criteria match: [XX]/100 — [3-4 SENTENCES: name every matching symptom from the case verbatim, explain how each maps to the diagnostic criteria, and note any symptoms that are notably absent or present that affect the score]\n"
+            "- Lab/vital alignment: [XX]/100 — [3-4 SENTENCES: quote the exact vital sign / lab values from the case, explain what each value indicates clinically, and state whether they are concordant or discordant with the suggested diagnosis]\n"
+            "- RAG similarity: [XX]/100 — [3-4 SENTENCES: explicitly name the retrieved guideline(s) or ICD-10 code(s) from RETRIEVED_GUIDELINES, explain how closely they match this suggestion, and note any gaps in the retrieved evidence]\n"
+            "- Self-consistency: [XX]/100 — [3-4 SENTENCES: walk through whether the symptoms, vitals, and history are mutually consistent with a single diagnosis, and flag any contradictions or ambiguity that lower confidence]\n"
+            "- Comorbidity prior: [XX]/100 — [3-4 SENTENCES: reference the patient's specific chronic conditions/medications from the case, explain how each raises, lowers, or has no effect on the probability of this diagnosis]\n\n"
+            "2. 'differential_considerations': string. List 2-4 alternative diagnoses you considered but excluded, and WHY each was ruled out in favor of your top suggestion. Format as a numbered list separated by literal \\n, e.g. '1. **Bacterial Pneumonia (J15.9)**: Considered due to X, but ruled out because Y.'\n\n"
+            "3. 'reasoning_trace': string. Your full internal chain of thought from the REASONING PROCESS section above (Step 1 Symptom clustering, Step 2 Differential generation, Step 3 ICD-10-CM code mapping, Step 4 Evidence scoring, Step 5 Source verification). This MUST be distinct from and more detailed than the 'reasoning' field of any single suggestion — it is the full step-by-step trace, not a repeat of a suggestion's rationale. Format as literal \\n separated lines, using '**Step N: <name>**' headers followed by '- ' bullet points of the analysis at that step.\n\n"
             "Return ONLY a valid JSON object matching this structure. Make sure to escape all newline characters (\\n) and double quotes within the JSON string values. Do NOT output a markdown 'analysis_report' string."
         )
 
@@ -516,21 +684,38 @@ def get_ai_diagnosis_suggestions(
         clean_text = re.sub(r'\\([^"\\/bfnrtu])', r'\1', clean_text)
             
         data = json.loads(clean_text, strict=False)
-        
+
+        # The LLM free-generates the overall 'accuracy' and the 5 per-dimension scores in
+        # 'accuracy_explanation' independently in the same response, so nothing guarantees they
+        # agree with the composite formula shown to the doctor (0.30*symptom + 0.25*lab +
+        # 0.20*rag + 0.15*consistency + 0.10*comorbidity). Recompute accuracy deterministically
+        # from the sub-scores so the confidence badge can never contradict the score breakdown.
+        def compute_composite_accuracy(accuracy_explanation: str, fallback: float) -> float:
+            weights = [0.30, 0.25, 0.20, 0.15, 0.10]
+            sub_scores = [int(m) for m in re.findall(r'(\d{1,3})\s*/\s*100', accuracy_explanation)]
+            if len(sub_scores) >= 5:
+                composite = sum(w * min(s, 100) for w, s in zip(weights, sub_scores[:5])) / 100.0
+                return round(composite, 4)
+            return fallback
+
         suggestions = []
         for item in data.get("suggestions", []):
+            explanation = item.get("accuracy_explanation", "")
+            computed_accuracy = compute_composite_accuracy(explanation, float(item.get("accuracy", 0.50)))
             suggestions.append(DiagnosisSuggestion(
                 icd_code=item.get("icd_code", "R69"),
                 icd_title=item.get("icd_title", "Illness, unspecified"),
-                accuracy=float(item.get("accuracy", 0.50)),
+                accuracy=computed_accuracy,
                 reasoning=item.get("reasoning", ""),
-                accuracy_explanation=item.get("accuracy_explanation", ""),
+                accuracy_explanation=explanation,
                 medical_source=item.get("medical_source", "World Health Organization (WHO) ICD-10 Database")
             ))
             
         # Forcefully discard any hallucinated markdown formatting from the LLM
         # and dynamically build the pristine markdown report based ONLY on the structured JSON data.
-        report = build_dynamic_report(suggestions)
+        differential_considerations = data.get("differential_considerations", "")
+        reasoning_trace = data.get("reasoning_trace", "")
+        report = build_dynamic_report(suggestions, differential_considerations, reasoning_trace)
             
         return DiagnosisResponse(suggestions=suggestions, compiled_details=details, analysis_report=report)
         

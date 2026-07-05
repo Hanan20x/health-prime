@@ -22,9 +22,47 @@ if os.path.exists(env_path):
 from app.database import SessionLocal
 from app.models import Patient, Provider, Appointment
 
+def get_auth_token():
+    """Log in as the seeded E-Health Admin, resolving the email OTP step by reading
+    the dev-mode OTP that the backend prints to its own console/log (no SMTP configured
+    in this test environment)."""
+    import re, time
+
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@healthprime.sa")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "ChangeMe123!")
+
+    step1 = requests.post(f"{api_url}/auth/login", json={"email": admin_email, "password": admin_password})
+    step1.raise_for_status()
+    data = step1.json()
+    if not data.get("requiresOtp"):
+        return data["accessToken"]
+
+    backend_log = os.environ.get("BACKEND_LOG_PATH", "/tmp/work/backend.log")
+    code = None
+    for _ in range(20):
+        time.sleep(0.5)
+        if os.path.exists(backend_log):
+            with open(backend_log, "r", errors="ignore") as f:
+                log_text = f.read()
+            matches = re.findall(rf"\[OTP\] Code for {re.escape(admin_email)}: (\d{{6}})", log_text)
+            if matches:
+                code = matches[-1]
+                break
+    if not code:
+        raise RuntimeError("Could not find OTP code in backend log for auth flow")
+
+    step2 = requests.post(f"{api_url}/auth/login", json={"email": admin_email, "password": admin_password, "otp": code})
+    step2.raise_for_status()
+    return step2.json()["accessToken"]
+
+
 def run_test():
     print(f"Testing against backend API: {api_url}")
-    
+
+    token = get_auth_token()
+    auth_headers = {"Authorization": f"Bearer {token}"}
+    print("Authenticated as admin, obtained access token.")
+
     with SessionLocal() as db:
         # Get patient and provider directly from database
         patient = db.query(Patient).first()
@@ -78,7 +116,7 @@ def run_test():
         }
         
         print("Requesting AI Slot generation...")
-        ai_res = requests.post(f"{api_url}/appointments/generate-slot", json=ai_data)
+        ai_res = requests.post(f"{api_url}/appointments/generate-slot", json=ai_data, headers=auth_headers)
         if ai_res.status_code != 200:
             print(f"ERROR: AI Slot generation failed. {ai_res.text}")
             sys.exit(1)

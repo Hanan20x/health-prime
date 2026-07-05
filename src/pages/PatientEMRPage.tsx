@@ -379,10 +379,10 @@ export default function PatientEMRPage() {
                    { label: tx("heightUnit", lang) || "Height", value: latestVitals?.height || "—", icon: MoveHorizontal },
                    { label: tx("weightUnit", lang) || "Weight", value: latestVitals?.weight || "—", icon: MoveHorizontal },
                    { label: tx("bmiUnit", lang) || "BMI", value: latestVitals?.bmi || "—", color: "text-destructive", icon: Activity },
-                   { label: "Temp (°C)", value: latestVitals?.temp || "—", icon: Activity },
+                   { label: "Temp (°C)", value: latestVitals?.temp || "—", color: latestVitals?.temp && parseFloat(latestVitals.temp) >= 38 ? "text-destructive" : "text-emerald-500", icon: Activity },
                    { label: tx("bpUnit", lang) || "BP", value: latestVitals?.bp || "—", icon: Activity },
-                   { label: tx("hrUnit", lang) || "HR", value: latestVitals?.hr || "—", icon: Heart },
-                   { label: tx("spo2Unit", lang) || "SpO2", value: latestVitals?.spo2 || "—", icon: Activity },
+                   { label: tx("hrUnit", lang) || "HR", value: latestVitals?.hr || "—", color: latestVitals?.hr && parseInt(latestVitals.hr) > 100 ? "text-destructive" : "text-emerald-500", icon: Heart },
+                   { label: tx("spo2Unit", lang) || "SpO2", value: latestVitals?.spo2 || "—", color: latestVitals?.spo2 && parseInt(latestVitals.spo2) < 95 ? "text-destructive" : "text-emerald-500", icon: Activity },
                  ].map((stat, i) => (
                    <div key={i} className="bg-card border border-border/50 p-5 rounded-xl shadow-sm hover:shadow-md transition-shadow ring-1 ring-border/5">
                       <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1.5">{stat.label}</p>
