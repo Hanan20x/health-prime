@@ -484,7 +484,7 @@ export function ClinicalReportView({
             <Button
               size="sm"
               variant="outline"
-              disabled={!activeAppointment}
+              disabled={false}
               className="w-full mt-2 border-primary/20 text-primary hover:bg-primary/5 font-bold text-xs h-9 rounded-xl uppercase tracking-widest"
               onClick={() => onApply(s.code, s.title, compileDetailedJustification(s))}
             >
@@ -833,7 +833,7 @@ export default function PatientAIDiagnosisPage() {
 
                     diagnosisMutation.mutate(finalPayload);
                   }}
-                  disabled={diagnosisMutation.isPending || !activeAppointment}
+                  disabled={diagnosisMutation.isPending}
                 >
                   {diagnosisMutation.isPending ? (
                     <>
