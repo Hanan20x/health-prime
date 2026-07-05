@@ -17,6 +17,21 @@ router = APIRouter(prefix="/appointments", tags=["Appointments"])
 # Conflict detection uses half this value on each side of the requested time.
 SLOT_DURATION_MIN: int = 30
 
+# Alraith PHC operating hours: 8 AM to 5 PM. The last bookable slot start is 16:30 so that a
+# 30-minute appointment finishes by closing time.
+PHC_OPEN_HOUR: int = 8
+PHC_CLOSE_HOUR: int = 17
+
+
+def clamp_to_business_hours(dt: datetime) -> datetime:
+    """Push a datetime that falls outside PHC operating hours to the nearest valid slot:
+    before opening -> same day at opening time; at/after closing -> next day at opening time."""
+    if dt.hour < PHC_OPEN_HOUR:
+        return dt.replace(hour=PHC_OPEN_HOUR, minute=0, second=0, microsecond=0)
+    if dt.hour > PHC_CLOSE_HOUR or (dt.hour == PHC_CLOSE_HOUR and dt.minute > 0):
+        return (dt + timedelta(days=1)).replace(hour=PHC_OPEN_HOUR, minute=0, second=0, microsecond=0)
+    return dt
+
 @router.get("", response_model=List[AppointmentOut])
 def get_appointments(
     _user: CurrentUser,
@@ -660,7 +675,7 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                 conflict_found = True
                 if first_conflict_appt is None:
                     first_conflict_appt = conflicts[0]
-                temp_date += timedelta(minutes=SLOT_DURATION_MIN)
+                temp_date = clamp_to_business_hours(temp_date + timedelta(minutes=SLOT_DURATION_MIN))
                 attempts += 1
 
             if conflict_found:
@@ -881,6 +896,7 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, _user: CurrentUser
             date_obj = date_obj.replace(hour=hour, minute=minute, second=0, microsecond=0)
         except:
             date_obj = date_obj.replace(hour=10, minute=0, second=0, microsecond=0)
+        date_obj = clamp_to_business_hours(date_obj)
 
         # Conflict check and slot shifting logic
         if prov:
@@ -980,8 +996,9 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, _user: CurrentUser
             formatted_time = c.appointment_date.strftime("%I:%M %p (%Y-%m-%d)")
             conflicting_slots_info.append(f"{slot_type} with {prov.full_name} for patient {pat_name} at {formatted_time}")
             
-        # Shift slot forward by one slot duration and check again
-        temp_date = temp_date + timedelta(minutes=SLOT_DURATION_MIN)
+        # Shift slot forward by one slot duration and check again, wrapping to the next
+        # day's opening time if the shift would land outside PHC operating hours
+        temp_date = clamp_to_business_hours(temp_date + timedelta(minutes=SLOT_DURATION_MIN))
         attempts += 1
         
     # Construct manual_slots_affected explanation

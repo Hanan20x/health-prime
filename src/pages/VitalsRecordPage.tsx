@@ -34,7 +34,7 @@ import {
 import { toast } from "sonner";
 import { apiFetch } from "@/api/client";
 import type { PatientListItem, PatientVitalsContext, VitalOut, VitalsChartBundle, VitalsHistoryRow } from "@/api/types";
-import { cn } from "@/lib/utils";
+import { cn, isSameLocalDay } from "@/lib/utils";
 import { useLang } from "@/hooks/useLang";
 import { tx } from "@/lib/i18n";
 import { useAuth } from "@/hooks/useAuth";
@@ -156,12 +156,10 @@ export default function VitalsRecordPage() {
       // Auto-transition appointment to Waiting
       try {
          const appts = await apiFetch<any[]>("/appointments");
-         const todayDate = new Date();
-         const today = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
-         const todaysAppt = appts.find(a => 
-            a.patientId === patientId && 
-            (!a.status || a.status === "Scheduled") && 
-            a.appointmentDate.startsWith(today)
+         const todaysAppt = appts.find(a =>
+            a.patientId === patientId &&
+            (!a.status || a.status === "Scheduled") &&
+            isSameLocalDay(a.appointmentDate)
          );
          if (todaysAppt) {
             await apiFetch(`/appointments/${todaysAppt.id}/status`, { method: "PATCH", body: JSON.stringify({ status: "Waiting" }) });
