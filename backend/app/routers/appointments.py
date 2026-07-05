@@ -28,7 +28,7 @@ def clamp_to_business_hours(dt: datetime) -> datetime:
     before opening -> same day at opening time; at/after closing -> next day at opening time."""
     if dt.hour < PHC_OPEN_HOUR:
         return dt.replace(hour=PHC_OPEN_HOUR, minute=0, second=0, microsecond=0)
-    if dt.hour > PHC_CLOSE_HOUR or (dt.hour == PHC_CLOSE_HOUR and dt.minute > 0):
+    if dt.hour >= PHC_CLOSE_HOUR:
         return (dt + timedelta(days=1)).replace(hour=PHC_OPEN_HOUR, minute=0, second=0, microsecond=0)
     return dt
 
