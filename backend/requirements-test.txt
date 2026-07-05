@@ -1,0 +1,20 @@
+# Trimmed requirements file used to verify the backend quickly (used for the
+# conflict-detection integration test run). Omits faiss-cpu, sentence-transformers,
+# and langchain-huggingface, which are listed in requirements.txt but are not
+# imported anywhere in the codebase (the RAG pipeline uses BM25/lexical scoring,
+# not FAISS embeddings) - safe to skip for a fast local setup.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.13
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-jose[cryptography]==3.3.0
+bcrypt>=4.0.0
+python-multipart==0.0.20
+pyotp
+qrcode
+pypdf
+requests
+python-dotenv
