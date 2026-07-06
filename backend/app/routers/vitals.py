@@ -26,6 +26,27 @@ def _log_activity(db: Session, action: str, patient_name: str, provider_name: st
     db.add(ActivityLog(action=action, patient_name=patient_name, provider_name=provider_name))
 
 
+def _vitals_summary(v: VitalSign) -> str:
+    """Build a short, human-readable summary of a vitals reading for the activity feed,
+    e.g. 'Temp 39.5°C, HR 105 bpm, BP 120/80, SpO2 98% — Alert'."""
+    parts = []
+    if v.temperature_c is not None:
+        parts.append(f"Temp {v.temperature_c}°C")
+    if v.heart_rate is not None:
+        parts.append(f"HR {v.heart_rate} bpm")
+    if v.systolic_bp is not None and v.diastolic_bp is not None:
+        parts.append(f"BP {v.systolic_bp}/{v.diastolic_bp}")
+    if v.spo2 is not None:
+        parts.append(f"SpO2 {v.spo2}%")
+    summary = ", ".join(parts) if parts else "no readings captured"
+    is_alert = (
+        (v.temperature_c is not None and v.temperature_c > 38.0)
+        or (v.spo2 is not None and v.spo2 < 95)
+        or (v.heart_rate is not None and v.heart_rate > 100)
+    )
+    return f"{summary} — Alert" if is_alert else summary
+
+
 @router.post("/vitals", response_model=VitalOut, status_code=status.HTTP_201_CREATED)
 def create_vital(body: VitalCreate, user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
     p = db.query(Patient).filter(Patient.id == body.patient_id).first()
@@ -53,7 +74,7 @@ def create_vital(body: VitalCreate, user: CurrentUser, db: Annotated[Session, De
     db.add(v)
     db.commit()
     db.refresh(v)
-    _log_activity(db, "Vital signs recorded", patient_full_name(p), user.full_name)
+    _log_activity(db, f"Vital signs recorded ({_vitals_summary(v)})", patient_full_name(p), user.full_name)
     db.commit()
     return v
 
