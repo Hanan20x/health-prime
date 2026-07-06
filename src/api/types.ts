@@ -81,7 +81,7 @@ export interface ProviderDetail {
 
 export interface DashboardSummary {
   stats: { title: string; value: string | number; description: string }[];
-  activity: { id: number; action: string; patient: string; provider: string; time: string }[];
+  activity: { id: number; action: string; patient: string; provider: string; time: string; timestamp: string }[];
 }
 
 export interface VitalOut {
