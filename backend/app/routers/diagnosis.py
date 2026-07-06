@@ -841,6 +841,7 @@ async def search_icd10_codes_endpoint(_user: CurrentUser, q: str = ""):
             "Each object must have exactly: 'code' and 'description'.\n\nCodes:\n"
             + "".join(f"- {r['code']}: {r['title']}\n" for r in results)
         )
+        text = ""
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(
@@ -854,13 +855,23 @@ async def search_icd10_codes_endpoint(_user: CurrentUser, q: str = ""):
                         },
                     },
                 )
+                resp.raise_for_status()
                 rjson = resp.json()
             text = rjson.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
             text = re.sub(r"```(?:json)?\n?(.*?)\n?```", r"\1", text, flags=re.DOTALL).strip()
             desc_map = {item["code"]: item["description"] for item in json.loads(text) if "code" in item}
             for r in results:
                 r["description"] = desc_map.get(r["code"], r["title"])
-        except Exception:
+        except httpx.HTTPStatusError as e:
+            print(f"[icd10/search] Gemini request failed: {e.response.status_code} {e.response.text[:300]}")
+            for r in results:
+                r["description"] = r["title"]
+        except json.JSONDecodeError as e:
+            print(f"[icd10/search] Gemini returned unparseable JSON ({e}): {text[:300]!r}")
+            for r in results:
+                r["description"] = r["title"]
+        except Exception as e:
+            print(f"[icd10/search] Unexpected error generating descriptions: {type(e).__name__}: {e}")
             for r in results:
                 r["description"] = r["title"]
     else:
