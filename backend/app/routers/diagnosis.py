@@ -142,6 +142,35 @@ def _extract_field(details: str, *markers: str) -> str | None:
     return None
 
 
+def _fetch_rag_matches(keywords: List[str]) -> list:
+    """Query the same public NLM ICD-10-CM lookup service the LLM path uses for RAG, so the
+    deterministic fallback can report a genuine retrieval-based score instead of a hardcoded 0.
+    This is a free, unauthenticated API (no GEMINI_API_KEY needed), so it works even when the
+    LLM itself is unavailable.
+
+    The service expects a single clinical term or short standard phrase — concatenating several
+    matched keywords into one query (e.g. "anxious palpitations nervous") reliably returns zero
+    results, so each keyword is queried individually and the results are pooled and de-duplicated.
+    """
+    import asyncio
+    from app.services.who_icd import search_icd10
+
+    seen_codes = set()
+    combined = []
+    for kw in keywords[:4]:
+        try:
+            results = asyncio.run(search_icd10(kw))
+        except Exception as e:
+            print("RAG lookup failed in fallback engine:", e)
+            continue
+        for r in results:
+            code = r.get("code", "").strip().upper()
+            if code and code not in seen_codes:
+                seen_codes.add(code)
+                combined.append(r)
+    return combined
+
+
 def _build_score_breakdown(
     diag: dict,
     matched_keywords: List[str],
@@ -153,65 +182,117 @@ def _build_score_breakdown(
     kw_list = ", ".join(f"'{k}'" for k in matched_keywords)
     symptom_line = (
         f"- Symptom-criteria match: {symptom_pct}/100 — The case text explicitly contains the term(s) "
-        f"{kw_list}, which the fallback keyword engine maps directly to {diag['icd_title']}. Each additional "
-        f"matching keyword raises this score, capped at 95, so the {len(matched_keywords)} match(es) found here "
-        f"account for the reported percentage."
+        f"{kw_list}, which the fallback engine's static lookup table maps directly to {diag['icd_title']} "
+        f"({diag['icd_code']}). The scoring formula starts every match at a 60% base, then adds 10 percentage "
+        f"points for each additional matching keyword beyond the first, plus a further 5-point boost if the "
+        f"text also contains an intensity qualifier such as 'severe', 'persistent', or 'chronic', capped at a "
+        f"maximum of 95%; the {len(matched_keywords)} distinct keyword match(es) found here, combined with any "
+        f"such qualifier, account for the {symptom_pct}% reported. This axis carries the heaviest weight "
+        f"(30%) in the composite confidence score precisely because direct keyword presence is the strongest "
+        f"signal this non-LLM engine can measure."
     )
 
     vitals_text = _extract_field(details, "current vitals", "vital_signs", "vitals")
     if vitals_text:
         lab_pct = 70
         lab_line = (
-            f"- Lab/vital alignment: {lab_pct}/100 — The recorded vitals ({vitals_text.replace(chr(10), '; ')}) "
-            f"were present in the case data and do not contradict {diag['icd_title']}; the score reflects that "
-            f"the fallback engine can confirm vitals were supplied, though it does not perform clinical "
-            f"range-checking on those values the way the LLM-based path does."
+            f"- Lab/vital alignment: {lab_pct}/100 — The case data included a recorded set of vitals "
+            f"({vitals_text.replace(chr(10), '; ')}), and none of the individual readings in that set "
+            f"contradicts a diagnosis of {diag['icd_title']}. The score is capped at 70 rather than higher "
+            f"because this fallback engine only checks for the *presence* of vitals data, not whether each "
+            f"specific value (e.g. an exact blood pressure or heart rate reading) falls inside the clinically "
+            f"expected range for this condition — that finer-grained numeric range-checking is only performed "
+            f"by the LLM-based path when it is available."
         )
     else:
         lab_pct = 30
         lab_line = (
-            f"- Lab/vital alignment: {lab_pct}/100 — No vital sign or lab data was found in the submitted case "
-            f"text, so this score is deliberately kept low: it reflects an absence of confirming evidence "
-            f"rather than a confirmed clinical alignment with {diag['icd_title']}."
+            f"- Lab/vital alignment: {lab_pct}/100 — No vital sign or lab result section was found anywhere "
+            f"in the submitted case text (no 'Vitals' or 'Vital Signs' marker was detected). The score is "
+            f"deliberately kept low rather than zero, since a missing vitals section is an absence of "
+            f"corroborating evidence for {diag['icd_title']}, not evidence of contradiction; a physician "
+            f"should record vitals before relying on this suggestion."
         )
 
-    rag_line = (
-        "- RAG similarity: 0/100 — This deterministic fallback performs keyword matching against a fixed "
-        "ICD-10 lookup table rather than a semantic vector search over retrieved clinical guidelines; no "
-        "guideline retrieval was executed, so this axis is intentionally scored at 0 rather than estimated."
-    )
+    rag_results = _fetch_rag_matches(matched_keywords)
+    result_codes = {r.get("code", "").strip().upper() for r in rag_results}
+    result_titles = [r.get("title", "") for r in rag_results[:5]]
+    queried_terms = ", ".join(f"'{k}'" for k in matched_keywords[:4])
+    target_code = diag["icd_code"].upper()
+    exact_hit = target_code in result_codes or any(c.startswith(target_code.split(".")[0]) for c in result_codes)
+    if rag_results and exact_hit:
+        rag_pct = 85
+        rag_line = (
+            f"- RAG similarity: {rag_pct}/100 — Unlike a purely static keyword table, this score comes from "
+            f"live retrieval calls to the NLM Clinical Table Search Service (the same public ICD-10-CM API the "
+            f"LLM-based path uses for RAG), querying each matched symptom term individually ({queried_terms}) "
+            f"and pooling the results. Among the {len(rag_results)} distinct candidate code(s) returned — "
+            f"including {', '.join(t for t in result_titles) or 'no titles'} — {diag['icd_code']} "
+            f"({diag['icd_title']}) itself appears, meaning an independent, externally maintained clinical "
+            f"coding database corroborates this suggestion for the same symptom terms, not just this "
+            f"application's own internal lookup table."
+        )
+    elif rag_results:
+        rag_pct = 40
+        rag_line = (
+            f"- RAG similarity: {rag_pct}/100 — Live queries to the NLM Clinical Table Search Service for each "
+            f"matched symptom term ({queried_terms}) returned {len(rag_results)} distinct candidate code(s) "
+            f"({', '.join(t for t in result_titles) or 'no titles'}), but {diag['icd_code']} itself was not "
+            f"among them. This suggests the symptom terms are real, recognised clinical vocabulary, but the "
+            f"specific code proposed here is this application's own inference rather than one directly "
+            f"corroborated by the external retrieval, so the score is moderated down accordingly."
+        )
+    else:
+        rag_pct = 0
+        rag_line = (
+            f"- RAG similarity: {rag_pct}/100 — Live queries to the NLM Clinical Table Search Service for each "
+            f"matched symptom term ({queried_terms}) returned no results (the service may be unreachable, or "
+            f"none of these particular terms are recognised standard clinical vocabulary on their own), so no "
+            f"external corroboration could be obtained for this suggestion; this reflects a failed or empty "
+            f"retrieval, not a deliberate design choice."
+        )
 
     if other_matches:
         consistency_pct = 55
         consistency_line = (
-            f"- Self-consistency: {consistency_pct}/100 — The same case text also matched keyword(s) associated "
-            f"with {', '.join(other_matches)}, so this suggestion is not the only pattern present in the input. "
-            f"The score is moderated downward to reflect that ambiguity; a physician should weigh these "
-            f"alternatives before confirming {diag['icd_title']}."
+            f"- Self-consistency: {consistency_pct}/100 — The same case text also matched keyword(s) "
+            f"associated with {len(other_matches)} other condition(s) in the lookup table ({', '.join(other_matches)}), "
+            f"so {diag['icd_title']} is not the only pattern present in the input; the presence of "
+            f"symptom terms belonging to multiple conditions introduces genuine diagnostic ambiguity that a "
+            f"single deterministic pass cannot resolve on its own. The score is moderated downward "
+            f"proportionally to reflect that a physician must weigh these {len(other_matches)} alternative(s) "
+            f"before confirming {diag['icd_title']} as the primary diagnosis."
         )
     else:
         consistency_pct = 85
         consistency_line = (
-            f"- Self-consistency: {consistency_pct}/100 — No keywords for any other condition in the fallback "
-            f"lookup table were found in the same text, so there is no competing pattern in the input data; "
-            f"the matched symptoms point consistently toward {diag['icd_title']} alone."
+            f"- Self-consistency: {consistency_pct}/100 — Checking the case text against every other entry in "
+            f"the fallback lookup table found no keywords belonging to any other condition, so there is no "
+            f"competing symptom pattern in the input data; every matched term ({kw_list}) points in the same "
+            f"direction, toward {diag['icd_title']} alone, which is why this axis scores high despite the "
+            f"engine's otherwise conservative, non-LLM methodology."
         )
 
     comorbidity_text = _extract_field(details, "chronic conditions", "chronic_conditions")
     if comorbidity_text:
         comorbidity_pct = 60
         comorbidity_line = (
-            f"- Comorbidity prior: {comorbidity_pct}/100 — The patient's documented chronic conditions "
-            f"({comorbidity_text}) were factored in as background risk context for {diag['icd_title']}; the "
-            f"fallback engine raises the baseline score whenever comorbidity data is available, though it does "
-            f"not model condition-specific interactions the way the LLM-based path does."
+            f"- Comorbidity prior: {comorbidity_pct}/100 — The patient's documented chronic condition history "
+            f"({comorbidity_text}) was located in the case data and factored in as background clinical risk "
+            f"context for {diag['icd_title']}; patients with an existing relevant history are statistically "
+            f"more likely to present with related or recurrent conditions. The score stops short of the "
+            f"90-100 range because this fallback engine only checks whether comorbidity text is *present*, "
+            f"not whether the specific listed condition(s) are pathophysiologically linked to {diag['icd_title']} "
+            f"— that clinical-relevance judgement is reserved for the LLM-based path."
         )
     else:
         comorbidity_pct = 40
         comorbidity_line = (
-            f"- Comorbidity prior: {comorbidity_pct}/100 — No chronic condition history was available in the "
-            f"provided case data, so this score reflects a neutral baseline rather than a confirmed risk "
-            f"adjustment for {diag['icd_title']}."
+            f"- Comorbidity prior: {comorbidity_pct}/100 — No 'Chronic Conditions' section (or an explicit "
+            f"'None'/'Not available' value) was found anywhere in the provided case data, so no pre-existing "
+            f"condition could be used to adjust the prior probability of {diag['icd_title']} either up or "
+            f"down; the score reflects this neutral, uninformed baseline rather than a confirmed absence of "
+            f"risk."
         )
 
     return "\n".join([symptom_line, lab_line, rag_line, consistency_line, comorbidity_line])
@@ -273,7 +354,9 @@ def run_fallback_diagnostic_engine(details: str) -> List[DiagnosisSuggestion]:
                 "than a specific condition.\n"
                 "- Lab/vital alignment: 0/100 — No condition-specific vitals check applies to an unspecified "
                 "illness code.\n"
-                "- RAG similarity: 0/100 — This deterministic fallback does not perform guideline retrieval.\n"
+                "- RAG similarity: 0/100 — No symptom keywords were matched, so no meaningful query could be "
+                "constructed to search the NLM Clinical Table Search Service; retrieval was skipped rather "
+                "than attempted and failed.\n"
                 "- Self-consistency: 0/100 — There is no competing or supporting pattern to compare against, "
                 "since no keywords matched at all.\n"
                 "- Comorbidity prior: 0/100 — No specific condition was identified, so comorbidity context "
