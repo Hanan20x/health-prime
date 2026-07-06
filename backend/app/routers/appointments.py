@@ -529,7 +529,11 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                     f"Right now it's set to \"{req.priority_level or 'Routine'}\" — I strongly recommend changing this to Urgent."
                 )
             else:
-                priority_reasoning = "The priority matches clinical guidelines for acute symptoms."
+                priority_reasoning = (
+                    f"The reason given, \"{req.reason}\", matches one or more acute-illness keywords the clinic screens for "
+                    f"(e.g. fever, chest pain, breathing difficulty, trauma, or a similar red-flag term), and the priority is "
+                    f"already set to Urgent, satisfying the 4-hour SLA for these cases. No change is needed."
+                )
         elif is_soon_reason:
             suggested_priority = "Soon"
             priority_flag = req.priority_level == "Routine"
@@ -539,11 +543,21 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                     f"It's currently set to Routine. I'd recommend changing this to \"Soon\" (P2)."
                 )
             else:
-                priority_reasoning = "The priority matches clinical guidelines."
+                priority_reasoning = (
+                    f"The reason given, \"{req.reason}\", matches a moderate-urgency keyword (e.g. infection, pain, "
+                    f"vomiting, fracture, swelling, or cough), which the clinic's 48-hour SLA tier covers. The priority "
+                    f"is already set to \"{req.priority_level or 'Soon'}\", which meets or exceeds that tier, so no change is needed."
+                )
         else:
             suggested_priority = req.priority_level or "Routine"
             priority_flag = False
-            priority_reasoning = "The priority matches clinical guidelines."
+            priority_reasoning = (
+                f"The reason given, \"{req.reason or 'Not specified'}\", was checked against both the acute-illness keyword "
+                f"list (fever, chest pain, breathing difficulty, trauma, bleeding, stroke, cardiac symptoms, etc.) and the "
+                f"moderate-urgency list (infection, pain, vomiting, fracture, swelling, cough) and matched neither, so "
+                f"standard Routine scheduling applies. The priority is currently \"{req.priority_level or 'Routine'}\", "
+                f"which is appropriate — no change is needed."
+            )
 
         is_nurse = "nurse" in prov_role.lower() if prov_role else False
         
@@ -562,9 +576,66 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             doctor_flag = prov_name == "Unknown" or not req.provider_id
             suggested_doctor = best_doctor if doctor_flag else "KEEP"
             doctor_reasoning = (
-                "Consider assigning the patient's registered GP for better continuity of care." 
-                if doctor_flag else f"You've selected {prov_name} ({prov_specialty}) for this appointment. This is optimal based on doctor availability and suitability for the patient case."
+                "Consider assigning the patient's registered GP for better continuity of care."
+                if doctor_flag else (
+                    f"{prov_name} holds the role of {prov_role} (specialty: {prov_specialty}), which is a licensed "
+                    f"physician role suitable for this visit type (\"{req.visit_type or 'Not specified'}\"), and this "
+                    f"reason doesn't trigger the nurse-reassignment or emergency-escalation rules. No change is needed."
+                )
             )
+
+        # Actually check the database for a conflicting booking, rather than assuming none
+        # exists — this fallback path used to unconditionally claim "no current conflicts"
+        # for Date/Time without ever querying for one.
+        date_flag = False
+        time_flag = False
+        date_reasoning = f"No appointment date/time was specified, so no conflict check could be run."
+        time_reasoning = date_reasoning
+        final_date_str = req.appointment_date or "Not Specified"
+        final_time_str = req.time_str or "Not Specified"
+
+        if req.provider_id and req.appointment_date and req.time_str:
+            try:
+                requested_dt = datetime.strptime(f"{req.appointment_date} {req.time_str}", "%Y-%m-%d %H:%M")
+                local_tz = datetime.now().astimezone().tzinfo
+                requested_dt = requested_dt.replace(tzinfo=local_tz)
+                half = SLOT_DURATION_MIN - 1
+                conflicts = db.query(Appointment).filter(
+                    Appointment.provider_id == req.provider_id,
+                    Appointment.appointment_date >= requested_dt - timedelta(minutes=half),
+                    Appointment.appointment_date <= requested_dt + timedelta(minutes=half),
+                    Appointment.status.in_(["Scheduled", "Confirmed", "Booked"]),
+                    *([Appointment.id != req.appointment_id] if req.appointment_id else []),
+                ).all()
+
+                if not conflicts:
+                    checked_window = f"{(requested_dt - timedelta(minutes=half)).strftime('%H:%M')}–{(requested_dt + timedelta(minutes=half)).strftime('%H:%M')}"
+                    date_reasoning = time_reasoning = (
+                        f"Queried the schedule for {prov_name} on {req.appointment_date} within the "
+                        f"{checked_window} window surrounding the requested {req.time_str} slot ({SLOT_DURATION_MIN}-minute "
+                        f"appointment length) and found zero overlapping bookings. The requested date and time are confirmed free."
+                    )
+                else:
+                    date_flag = True
+                    time_flag = True
+                    conflict_descriptions = []
+                    for c in conflicts:
+                        c_pat = db.get(Patient, c.patient_id)
+                        c_pat_name = f"{c_pat.first_name} {c_pat.family_name}" if c_pat else "another patient"
+                        conflict_descriptions.append(f"{c_pat_name} at {c.appointment_date.astimezone(local_tz).strftime('%H:%M')}")
+                    conflict_str = "; ".join(conflict_descriptions)
+                    date_reasoning = time_reasoning = (
+                        f"Queried the schedule for {prov_name} on {req.appointment_date} and found an existing booking "
+                        f"that overlaps the requested {req.time_str} slot ({conflict_str}). Keeping the requested time "
+                        f"would double-book this provider; a different slot should be chosen."
+                    )
+                    final_date_str = req.appointment_date
+                    final_time_str = req.time_str
+            except (ValueError, TypeError):
+                date_reasoning = time_reasoning = (
+                    f"Could not parse \"{req.appointment_date} {req.time_str}\" as a valid date/time, so the "
+                    f"conflict check was skipped."
+                )
 
         diffs_out = [
             {
@@ -584,16 +655,16 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             {
                 "field": "Date",
                 "staff_entry": req.appointment_date or "Not Specified",
-                "ai_suggestion": "KEEP",
-                "flag": False,
-                "reasoning": "The selected date is optimal. There's no current conflicts."
+                "ai_suggestion": final_date_str if date_flag else "KEEP",
+                "flag": date_flag,
+                "reasoning": date_reasoning
             },
             {
                 "field": "Time",
                 "staff_entry": req.time_str or "Not Specified",
-                "ai_suggestion": "KEEP",
-                "flag": False,
-                "reasoning": "The selected time slot is optimal and has confirmed availability with no current conflicts."
+                "ai_suggestion": final_time_str if time_flag else "KEEP",
+                "flag": time_flag,
+                "reasoning": time_reasoning
             }
         ]
         
@@ -644,10 +715,10 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
     suggested_time = "KEEP"
     date_flag = False
     time_flag = False
-    date_reasoning = "The selected date is optimal. There's no current conflicts."
-    time_reasoning = "The selected time slot is optimal and has confirmed availability with no current conflicts."
+    date_reasoning = "No appointment date/time or provider was specified, so no conflict check could be run."
+    time_reasoning = date_reasoning
     manual_slots_affected = None
-    
+
     if target_prov_id and (req.utc_datetime or (req.appointment_date and req.time_str)):
         try:
             from datetime import datetime, timedelta, timezone
@@ -707,6 +778,22 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                     date_reasoning = "Shifted to the next available day due to schedule conflicts."
                 time_reasoning = f"Conflict with {conflict_desc}'s appointment at this slot. Shifted to {local_temp.strftime('%H:%M')} — the next available slot to prevent double-booking."
                 manual_slots_affected = f"Bypassed {attempts} conflicting slot(s) to find availability."
+            else:
+                target_prov = db.get(Provider, target_prov_id)
+                target_prov_name = target_prov.full_name if target_prov else "the assigned provider"
+                local_tz = datetime.now().astimezone().tzinfo
+                local_req = req_dt.astimezone(local_tz) if req_dt.tzinfo else req_dt
+                half = SLOT_DURATION_MIN - 1
+                checked_window = (
+                    f"{(local_req - timedelta(minutes=half)).strftime('%H:%M')}"
+                    f"–{(local_req + timedelta(minutes=half)).strftime('%H:%M')}"
+                )
+                date_reasoning = time_reasoning = (
+                    f"Queried {target_prov_name}'s schedule on {local_req.strftime('%Y-%m-%d')} within the "
+                    f"{checked_window} window surrounding the requested {local_req.strftime('%H:%M')} slot "
+                    f"({SLOT_DURATION_MIN}-minute appointment length, status in Scheduled/Confirmed/Booked/Completed) "
+                    f"and found zero overlapping bookings. The requested date and time are confirmed free."
+                )
         except Exception as e:
             print(f"Time parse error: {e}")
     
@@ -716,14 +803,26 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             "staff_entry": req.priority_level or "Routine",
             "ai_suggestion": ai_response.get("final_priority") if priority_flag else "KEEP",
             "flag": priority_flag,
-            "reasoning": get_reasoning(["escalation", "confirm_info", "emergency"]) or get_any_flag_reasoning() or ("Priority needs review." if priority_flag else "The priority matches clinical guidelines.")
+            "reasoning": get_reasoning(["escalation", "confirm_info", "emergency"]) or get_any_flag_reasoning() or (
+                "Priority needs review." if priority_flag else (
+                    f"The reason given, \"{req.reason or 'Not specified'}\", was assessed against the clinic's Urgent "
+                    f"(4-hour) and Soon (48-hour) escalation criteria and did not warrant a higher tier than the "
+                    f"currently selected \"{req.priority_level or 'Routine'}\". No escalation flag was raised, so no change is needed."
+                )
+            )
         },
         {
             "field": "Doctor",
             "staff_entry": prov_name,
             "ai_suggestion": suggested_provider_name if doctor_flag else "KEEP",
             "flag": doctor_flag,
-            "reasoning": get_reasoning(["slot_or_fit_conflict", "continuity_overridden"]) or (get_any_flag_reasoning() if doctor_flag else None) or ("The nurse isn't suitable for an emergent case. Consider assigning the recommended provider." if doctor_flag else f"You've selected {prov_name} ({prov_specialty}) for this appointment. This is optimal based on doctor availability and suitability for the patient case.")
+            "reasoning": get_reasoning(["slot_or_fit_conflict", "continuity_overridden"]) or (get_any_flag_reasoning() if doctor_flag else None) or (
+                "The nurse isn't suitable for an emergent case. Consider assigning the recommended provider." if doctor_flag else (
+                    f"{prov_name} holds the role of {prov_role} (specialty: {prov_specialty}), which is appropriate "
+                    f"for this visit type (\"{req.visit_type or 'Not specified'}\"), and no continuity-of-care or "
+                    f"nurse-reassignment rule applies to this case. No change is needed."
+                )
+            )
         },
         {
             "field": "Date",
