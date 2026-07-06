@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -605,7 +605,6 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                     Appointment.appointment_date >= requested_dt - timedelta(minutes=half),
                     Appointment.appointment_date <= requested_dt + timedelta(minutes=half),
                     Appointment.status.in_(["Scheduled", "Confirmed", "Booked"]),
-                    *([Appointment.id != req.appointment_id] if req.appointment_id else []),
                 ).all()
 
                 if not conflicts:
@@ -721,8 +720,6 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
 
     if target_prov_id and (req.utc_datetime or (req.appointment_date and req.time_str)):
         try:
-            from datetime import datetime, timedelta, timezone
-            
             if hasattr(req, "utc_datetime") and req.utc_datetime:
                 iso_str = req.utc_datetime.replace('Z', '+00:00')
                 req_dt = datetime.fromisoformat(iso_str)
@@ -776,6 +773,11 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                     date_flag = True
                     suggested_date = local_temp.strftime("%Y-%m-%d")
                     date_reasoning = "Shifted to the next available day due to schedule conflicts."
+                else:
+                    date_reasoning = (
+                        f"The requested date ({local_req.strftime('%Y-%m-%d')}) has other availability; only the "
+                        f"requested time slot conflicted, so the date is kept and just the time is adjusted."
+                    )
                 time_reasoning = f"Conflict with {conflict_desc}'s appointment at this slot. Shifted to {local_temp.strftime('%H:%M')} — the next available slot to prevent double-booking."
                 manual_slots_affected = f"Bypassed {attempts} conflicting slot(s) to find availability."
             else:
