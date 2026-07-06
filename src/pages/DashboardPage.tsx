@@ -41,12 +41,14 @@ type ParsedActivity = {
   provider?: string;
   date?: string;
   changes?: string;
+  detail?: string;
+  isAlert?: boolean;
 };
 
 function parseAction(raw: string): ParsedActivity {
   // Pipe-delimited format: "Headline | Priority: X | Provider: Y | Date: Z"
   const parts = raw.split("|").map((s) => s.trim());
-  const headline = parts[0];
+  let headline = parts[0];
   const meta: Record<string, string> = {};
   for (const p of parts.slice(1)) {
     const idx = p.indexOf(":");
@@ -55,6 +57,15 @@ function parseAction(raw: string): ParsedActivity {
       meta[key] = p.slice(idx + 1).trim();
     }
   }
+
+  // Parenthetical detail format: "Vital signs recorded (Temp 39.5°C, HR 105 bpm ... — Alert)"
+  let detail: string | undefined;
+  const detailMatch = headline.match(/^(.*?)\s*\((.+)\)\s*$/);
+  if (detailMatch) {
+    headline = detailMatch[1].trim();
+    detail = detailMatch[2].trim();
+  }
+  const isAlert = detail ? /alert/i.test(detail) : false;
 
   let eventType: ParsedActivity["eventType"] = "other";
   if (headline.toLowerCase().includes("ai optimization") || headline.toLowerCase().includes("ai appointment")) eventType = "ai_optimization";
@@ -73,6 +84,8 @@ function parseAction(raw: string): ParsedActivity {
     provider: meta["provider"],
     date: meta["date"],
     changes: changeMatch ? changeMatch[1] : undefined,
+    detail,
+    isAlert,
   };
 }
 
@@ -107,7 +120,18 @@ function friendlyHeadline(raw: string): string {
     if (raw.includes("No changes")) return "AI Scheduling — No Changes";
     return "AI Scheduling Reviewed";
   }
-  return raw.split("|")[0].trim();
+  const headline = raw.split("|")[0].trim();
+  // Strip a trailing parenthetical detail, e.g. "Vital signs recorded (Temp 39.5°C ...)"
+  const detailMatch = headline.match(/^(.*?)\s*\((.+)\)\s*$/);
+  return detailMatch ? detailMatch[1].trim() : headline;
+}
+
+function formatAbsoluteTimestamp(isoTimestamp: string, lang: string): string {
+  const d = new Date(isoTimestamp);
+  return d.toLocaleString(lang === "ar" ? "ar-SA" : "en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
 }
 
 function ActivityFeed({ activity, isLoading, lang }: { activity?: any[]; isLoading: boolean; lang: string }) {
@@ -156,10 +180,25 @@ function ActivityFeed({ activity, isLoading, lang }: { activity?: any[]; isLoadi
                     <p className="text-base font-semibold text-foreground leading-snug">
                       {friendlyHeadline(item.action)}
                     </p>
-                    <span className="text-xs text-muted-foreground whitespace-nowrap mt-0.5 shrink-0">
+                    <span
+                      className="text-xs text-muted-foreground whitespace-nowrap mt-0.5 shrink-0 cursor-help"
+                      title={formatAbsoluteTimestamp(item.timestamp, lang)}
+                    >
                       {txRelativeTime(item.time, lang)}
                     </span>
                   </div>
+
+                  {/* Detail line, e.g. vitals summary — italic, color-coded by alert status */}
+                  {parsed.detail && (
+                    <p className={`text-sm italic mt-1 ${parsed.isAlert ? "text-red-600" : "text-emerald-600"}`}>
+                      {parsed.detail}
+                    </p>
+                  )}
+
+                  {/* Absolute timestamp */}
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">
+                    {formatAbsoluteTimestamp(item.timestamp, lang)}
+                  </p>
 
                   {/* Patient name */}
                   {item.patient && item.patient !== "—" && (

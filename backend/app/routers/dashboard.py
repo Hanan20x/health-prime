@@ -166,6 +166,7 @@ def summary(_user: CurrentUser, db: Annotated[Session, Depends(get_db)]):
             patient=log.patient_name,
             provider=log.provider_name,
             time=relative_time(log.created_at),
+            timestamp=log.created_at.isoformat(),
         )
         for log in logs
     ]

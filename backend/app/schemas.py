@@ -323,6 +323,7 @@ class ActivityItem(APIModel):
     patient: str
     provider: str
     time: str
+    timestamp: str
 
 
 class DashboardOut(APIModel):
@@ -547,6 +548,7 @@ class ActivityItem(APIModel):
     patient: str
     provider: str
     time: str
+    timestamp: str
 
 
 class DashboardOut(APIModel):
