@@ -15,6 +15,3 @@ langchain-groq>=0.1.15
 pyotp
 qrcode
 pypdf
-faiss-cpu
-sentence-transformers
-langchain-huggingface
