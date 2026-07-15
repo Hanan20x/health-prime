@@ -26,7 +26,9 @@ PHC_CLOSE_HOUR: int = 17
 # Fixed clinic timezone. Must NOT be derived from the server's OS timezone
 # (datetime.now().astimezone().tzinfo) since that's UTC on Render but varies
 # locally, causing conflict/slot times to be computed in the wrong timezone.
-PHC_TZ = ZoneInfo("Asia/Riyadh")
+# Set to Asia/Kuala_Lumpur (UTC+8) to match the demo environment; switch to
+# Asia/Riyadh (UTC+3) for the real Alraith PHC deployment in Saudi Arabia.
+PHC_TZ = ZoneInfo("Asia/Kuala_Lumpur")
 
 
 def clamp_to_business_hours(dt: datetime) -> datetime:
