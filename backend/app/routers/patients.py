@@ -85,6 +85,7 @@ def create_patient(body: PatientCreate, user: CurrentUser, db: Annotated[Session
         chronic_conditions=body.chronic_conditions,
         emergency_contact_name=body.emergency_contact_name,
         emergency_contact_phone=body.emergency_contact_phone,
+        attending_provider_id=body.attending_provider_id,
     )
     db.add(p)
     db.commit()
@@ -152,6 +153,7 @@ def update_patient(
     p.chronic_conditions = body.chronic_conditions
     p.emergency_contact_name = body.emergency_contact_name
     p.emergency_contact_phone = body.emergency_contact_phone
+    p.attending_provider_id = body.attending_provider_id
     db.commit()
     db.refresh(p)
     _log_activity(db, "Patient record updated", patient_full_name(p), user.full_name)
