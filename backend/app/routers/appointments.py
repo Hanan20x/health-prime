@@ -739,7 +739,7 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             temp_date = req_dt
             attempts = 0
             conflict_found = False
-            first_conflict_appt = None
+            last_conflict_appt = None
 
             while attempts < 20:
                 half = SLOT_DURATION_MIN - 1
@@ -756,8 +756,10 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                     break
 
                 conflict_found = True
-                if first_conflict_appt is None:
-                    first_conflict_appt = conflicts[0]
+                # Track the most recent conflict, not just the first one — the
+                # suggested slot is 30 min after whichever booking is actually
+                # sitting right before it, which may not be the original conflict.
+                last_conflict_appt = conflicts[0]
                 temp_date = clamp_to_business_hours(temp_date + timedelta(minutes=SLOT_DURATION_MIN))
                 attempts += 1
 
@@ -767,10 +769,10 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                 local_req = req_dt.astimezone(local_tz) if req_dt.tzinfo else req_dt
 
                 # Build a human-readable description of the blocking appointment
-                if first_conflict_appt:
-                    c_pat = db.get(Patient, first_conflict_appt.patient_id)
+                if last_conflict_appt:
+                    c_pat = db.get(Patient, last_conflict_appt.patient_id)
                     c_pat_name = f"{c_pat.first_name} {c_pat.family_name}" if c_pat else "another patient"
-                    c_time = first_conflict_appt.appointment_date.astimezone(local_tz).strftime("%H:%M")
+                    c_time = last_conflict_appt.appointment_date.astimezone(local_tz).strftime("%H:%M")
                     conflict_desc = f"{c_pat_name} at {c_time}"
                 else:
                     conflict_desc = "another patient"
