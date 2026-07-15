@@ -610,7 +610,7 @@ def get_ai_diagnosis_suggestions(
         # RAG implementation
         from app.services.who_icd import search_icd10
 
-        def extract_search_keywords(text: str, max_terms: int = 4) -> str:
+        def extract_search_keywords(text: str, max_terms: int = 4) -> list:
             import re
             # Drop structured field labels (e.g. "DOCTOR_NOTES:") and filler
             cleaned = re.sub(r'\b[A-Z][A-Z_]{2,}:', ' ', text)
@@ -631,14 +631,32 @@ def get_ai_diagnosis_suggestions(
                 seen.append(w)
                 if len(seen) >= max_terms:
                     break
-            return " ".join(seen) if seen else "general symptoms"
+            return seen if seen else ["general symptoms"]
 
         # Locally extracted instead of via an extra Gemini round-trip — cuts one full
         # network + generation cycle off every diagnosis request.
-        search_query = extract_search_keywords(details[:500])
+        search_keywords = extract_search_keywords(details[:500])
+        search_query = " ".join(search_keywords)
 
         import asyncio
-        icd_results = asyncio.run(search_icd10(search_query))
+        # The NLM service expects a single clinical term per query — a concatenated
+        # multi-word string (e.g. "severe chest pain shortness") reliably returns zero
+        # results, so each keyword is queried individually and results are pooled and
+        # de-duplicated (same approach as _fetch_rag_matches in the fallback engine).
+        icd_results = []
+        seen_codes = set()
+        for kw in search_keywords:
+            try:
+                kw_results = asyncio.run(search_icd10(kw))
+            except Exception as e:
+                print("RAG lookup failed in LLM path:", e)
+                continue
+            for r in kw_results:
+                code = r.get("code", "").strip().upper()
+                if code and code not in seen_codes:
+                    seen_codes.add(code)
+                    icd_results.append(r)
+
         rag_text = f"Search Term: {search_query}\n"
         if icd_results:
             rag_text += "Matched Online Guidelines/Codes:\n" + "\n".join([f"- {r['code']}: {r['title']}" for r in icd_results[:5]]) + "\n\n"
