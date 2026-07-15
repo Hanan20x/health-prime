@@ -133,6 +133,7 @@ class PatientCreate(APIModel):
     chronic_conditions: str | None = None
     emergency_contact_name: str | None = None
     emergency_contact_phone: str | None = None
+    attending_provider_id: int | None = None
 
 
 # --- Providers ---
