@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +22,11 @@ SLOT_DURATION_MIN: int = 30
 # 30-minute appointment finishes by closing time.
 PHC_OPEN_HOUR: int = 8
 PHC_CLOSE_HOUR: int = 17
+
+# Fixed clinic timezone. Must NOT be derived from the server's OS timezone
+# (datetime.now().astimezone().tzinfo) since that's UTC on Render but varies
+# locally, causing conflict/slot times to be computed in the wrong timezone.
+PHC_TZ = ZoneInfo("Asia/Riyadh")
 
 
 def clamp_to_business_hours(dt: datetime) -> datetime:
@@ -597,7 +603,7 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
         if req.provider_id and req.appointment_date and req.time_str:
             try:
                 requested_dt = datetime.strptime(f"{req.appointment_date} {req.time_str}", "%Y-%m-%d %H:%M")
-                local_tz = datetime.now().astimezone().tzinfo
+                local_tz = PHC_TZ
                 requested_dt = requested_dt.replace(tzinfo=local_tz)
                 half = SLOT_DURATION_MIN - 1
                 conflicts = db.query(Appointment).filter(
@@ -725,7 +731,7 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                 req_dt = datetime.fromisoformat(iso_str)
             else:
                 req_dt = datetime.strptime(f"{req.appointment_date} {req.time_str}", "%Y-%m-%d %H:%M")
-                local_tz = datetime.now().astimezone().tzinfo
+                local_tz = PHC_TZ
                 req_dt = req_dt.replace(tzinfo=local_tz)
             
             temp_date = req_dt
@@ -754,7 +760,7 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
                 attempts += 1
 
             if conflict_found:
-                local_tz = datetime.now().astimezone().tzinfo
+                local_tz = PHC_TZ
                 local_temp = temp_date.astimezone(local_tz) if temp_date.tzinfo else temp_date
                 local_req = req_dt.astimezone(local_tz) if req_dt.tzinfo else req_dt
 
@@ -783,7 +789,7 @@ def optimize_appointment_slot(req: OptimizationRequest, _user: CurrentUser, db: 
             else:
                 target_prov = db.get(Provider, target_prov_id)
                 target_prov_name = target_prov.full_name if target_prov else "the assigned provider"
-                local_tz = datetime.now().astimezone().tzinfo
+                local_tz = PHC_TZ
                 local_req = req_dt.astimezone(local_tz) if req_dt.tzinfo else req_dt
                 half = SLOT_DURATION_MIN - 1
                 checked_window = (
@@ -897,7 +903,7 @@ def generate_ai_optimized_slot(spec: AppointmentGenerateSpec, _user: CurrentUser
     import os
     import json
     
-    local_tz = datetime.now().astimezone().tzinfo
+    local_tz = PHC_TZ
     
     # 1. If we are optimizing an existing appointment
     if spec.appointment_id:
